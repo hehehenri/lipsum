@@ -1,86 +1,120 @@
+#[derive(Debug, Clone)]
 pub struct Location {
-    start: usize,
-    end: usize,
-    filename: String,
+    pub start: usize,
+    pub end: usize,
+    pub filename: String,
 }
 
+#[derive(Debug, Clone)]
 pub struct Text {
-    text: String,
-    location: Location,
+    pub text: String,
+    pub location: Location,
 }
 
+#[derive(Debug, Clone)]
 pub struct Let {
-    name: Text,
-    value: Box<Expression>,
-    next: Box<Expression>,
-    location: Location,
+    pub name: Text,
+    pub value: Box<Term>,
+    pub next: Box<Term>,
+    pub location: Location,
 }
 
+#[derive(Debug, Clone)]
 pub struct Function {
-    parameters: Vec<Text>,
-    value: Box<Expression>,
-    location: Location,
+    pub parameters: Vec<Text>,
+    pub value: Box<Term>,
+    pub location: Location,
 }
 
+#[derive(Debug, Clone)]
 pub struct Call {
-    callee: Box<Expression>,
-    arguments: Vec<Box<Expression>>,
-    location: Location,
+    pub callee: Box<Term>,
+    pub arguments: Vec<Term>,
+    pub location: Location,
 }
 
+#[derive(Debug, Clone)]
 pub struct If {
-    condition: Box<Expression>,
-    then: Box<Expression>,
-    otherwise: Box<Expression>,
-    location: Location,
+    pub condition: Box<Term>,
+    pub then: Box<Term>,
+    pub otherwise: Box<Term>,
+    pub location: Location,
 }
 
-pub enum Operator {
+#[derive(Debug, Clone)]
+pub enum BinaryOperator {
     Eq,
+    Neq,
     Lt,
     Lte,
     Gt,
     Gte,
+    And,
+    Or,
     Add,
+    Sub,
     Mul,
+    Div,
+    Rem,
 }
 
+#[derive(Debug, Clone)]
 pub struct Binary {
-    left: Box<Expression>,
-    op: Operator,
-    right: Box<Expression>,
-    location: Location,
+    pub left: Box<Term>,
+    pub op: BinaryOperator,
+    pub right: Box<Term>,
+    pub location: Location,
 }
 
-pub struct Var(Text);
+#[derive(Debug, Clone)]
+pub struct Var(pub Text);
 
+#[derive(Debug, Clone)]
 pub struct Int {
-    value: usize,
-    location: Location,
+    pub value: isize,
+    pub location: Location,
 }
 
-pub struct Str(Text);
+#[derive(Debug, Clone)]
+pub struct Str(pub Text);
 
+#[derive(Debug, Clone)]
 pub struct Print {
-    value: Box<Expression>,
-    location: Location,
+    pub value: Box<Term>,
+    pub location: Location,
 }
 
-pub enum Expression {
+#[derive(Debug, Clone)]
+pub enum Term {
     Let(Let),
     Function(Function),
     Call(Call),
     If(If),
-    Binary(If),
+    Binary(Binary),
     Var(Var),
     Int(Int),
     Str(Str),
     Print(Print),
 }
 
-pub enum Term {}
+// TODO: this is gross. define a trait for it or some shit
+impl Term {
+    pub fn location(&self) -> &Location {
+        match self {
+            Self::Let(let_) => &let_.location,
+            Self::Function(function) => &function.location,
+            Self::Call(call) => &call.location,
+            Self::If(if_) => &if_.location,
+            Self::Binary(binary) => &binary.location,
+            Self::Var(var) => &var.0.location,
+            Self::Int(int) => &int.location,
+            Self::Str(str) => &str.0.location,
+            Self::Print(print) => &print.location,
+        }
+    }
+}
 
 pub struct Program {
-    name: String,
-    expression: Expression,
+    pub name: String,
+    pub expression: Term,
 }
