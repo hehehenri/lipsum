@@ -3,7 +3,7 @@ use std::{fmt::Debug, rc::Rc};
 /// File definition, it contains all the statements,
 /// the module name, and a base location for it as anchor
 /// for the statements.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct File {
     pub name: String,
     pub expression: Term,
@@ -22,7 +22,7 @@ impl<T: Element> Element for Box<T> {
     }
 }
 
-#[derive(Default, Hash, PartialEq, Eq, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Hash, PartialEq, Eq, Clone, serde::Deserialize)]
 pub struct Location {
     pub start: usize,
     pub end: usize,
@@ -46,19 +46,13 @@ impl Debug for Location {
     }
 }
 
-impl From<Location> for miette::SourceSpan {
-    fn from(value: Location) -> Self {
-        Self::from(value.start..value.end)
-    }
-}
-
 /// An element. It can be a declaration, or a term.
 pub trait Element {
     fn location(&self) -> &Location;
 }
 
 /// Error node, it does contains an error.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Error {
     /// The error message.
     pub message: String,
@@ -76,7 +70,19 @@ impl Element for Error {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Var {
+    pub text: String,
+    pub location: Location,
+}
+
+impl Element for Var {
+    fn location(&self) -> &Location {
+        self.location()
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct If {
     pub condition: Box<Term>,
     pub then: Box<Term>,
@@ -84,16 +90,16 @@ pub struct If {
     pub location: Location,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Let {
-    pub name: crate::parser::Var,
+    pub name: Var,
     pub value: Box<Term>,
     pub next: Box<Term>,
     pub location: Location,
 }
 
 /// Int is a integer value like `0`, `1`, `2`, etc.
-#[derive(Default, Debug, Clone, serde::Serialize)]
+#[derive(Default, Debug, Clone, serde::Deserialize)]
 pub struct Str {
     pub value: String,
 
@@ -107,7 +113,7 @@ impl Element for Str {
     }
 }
 
-#[derive(Default, Debug, Clone, serde::Serialize)]
+#[derive(Default, Debug, Clone, serde::Deserialize)]
 pub struct Bool {
     pub value: bool,
     pub location: Location,
@@ -120,7 +126,7 @@ impl Element for Bool {
 }
 
 /// Int is a integer value like `0`, `1`, `2`, etc.
-#[derive(Default, Debug, Clone, serde::Serialize)]
+#[derive(Default, Debug, Clone, serde::Deserialize)]
 pub struct Int {
     /// The value of the integer.
     pub value: i32,
@@ -135,7 +141,7 @@ impl Element for Int {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub enum BinaryOp {
     Add, // Add
     Sub, // Subtract
@@ -152,7 +158,7 @@ pub enum BinaryOp {
     Or,  // Or
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Binary {
     pub lhs: Box<Term>,
     pub op: BinaryOp,
@@ -166,7 +172,7 @@ impl Element for Binary {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Call {
     pub callee: Box<Term>,
     pub arguments: Vec<Term>,
@@ -179,9 +185,9 @@ impl Element for Call {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Function {
-    pub parameters: Vec<crate::parser::Var>,
+    pub parameters: Vec<Var>,
     pub value: Box<Term>,
     pub location: Location,
 }
@@ -192,7 +198,7 @@ impl Element for Function {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Print {
     pub value: Box<Term>,
     pub location: Location,
@@ -204,7 +210,7 @@ impl Element for Print {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct First {
     pub value: Box<Term>,
     pub location: Location,
@@ -216,7 +222,7 @@ impl Element for First {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Second {
     pub value: Box<Term>,
     pub location: Location,
@@ -228,7 +234,7 @@ impl Element for Second {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Tuple {
     pub first: Box<Term>,
     pub second: Box<Term>,
@@ -241,7 +247,7 @@ impl Element for Tuple {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "kind")]
 pub enum Term {
     Error(Error),
@@ -257,7 +263,7 @@ pub enum Term {
     Second(Second),
     Bool(Bool),
     Tuple(Tuple),
-    Var(crate::parser::Var),
+    Var(Var),
 }
 
 impl Element for Term {
