@@ -78,7 +78,7 @@ pub struct Var {
 
 impl Element for Var {
     fn location(&self) -> &Location {
-        self.location()
+        &self.location
     }
 }
 
