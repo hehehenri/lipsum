@@ -1,21 +1,25 @@
-use std::{error::Error, fmt::Display};
-
 use im::hashmap::HashMap;
+use std::fmt::Display;
 
 use crate::ast::{
-    Binary, BinaryOperator, Call, Function, If, Let, Location, Operator, Term, Text, Var,
+    Binary, BinaryOp, Call, Element, Error, First, Function, If, Let, Location, Second, Term,
+    Tuple, Var,
 };
 
 #[derive(Clone)]
 pub enum Value {
     Closure {
-        parameters: Vec<Text>,
+        parameters: Vec<Var>,
         body: Term,
         context: Context,
     },
-    Int(isize),
+    Int(i32),
     Str(String),
     Bool(bool),
+    Tuple {
+        first: Box<Value>,
+        second: Box<Value>,
+    },
     Unit,
 }
 
@@ -30,6 +34,9 @@ impl Display for Value {
             Self::Int(int) => int.to_string(),
             Self::Str(str) => str.to_string(),
             Self::Bool(bool) => bool.to_string(),
+            Self::Tuple { first, second } => {
+                format!("({}, {})", first.to_string(), second.to_string())
+            }
             Self::Unit => String::from("unit"),
         };
 
@@ -39,12 +46,31 @@ impl Display for Value {
 
 type Context = HashMap<String, Value>;
 
-pub struct TypeError {
+pub struct RuntimeError {
     pub message: String,
+    pub full_text: String,
     pub location: Location,
 }
 
-fn apply(callee: Term, arguments: Vec<Term>, context: &Context) -> Result<Value, TypeError> {
+impl From<crate::ast::Error> for RuntimeError {
+    fn from(error: Error) -> Self {
+        RuntimeError {
+            message: error.message,
+            full_text: error.full_text,
+            location: error.location,
+        }
+    }
+}
+
+fn invalid_comparison(l_value: &Value, r_value: &Value, location: &Location) -> RuntimeError {
+    RuntimeError {
+        message: String::from("invalid comparison"),
+        full_text: format!("{} and {} cannot be compared", l_value, r_value),
+        location: location.clone(),
+    }
+}
+
+fn apply(callee: Term, arguments: Vec<Term>, context: &Context) -> Result<Value, RuntimeError> {
     let eval_arguments: Vec<Value> = arguments
         .iter()
         .map(|arg| eval(arg.clone(), context))
@@ -59,8 +85,12 @@ fn apply(callee: Term, arguments: Vec<Term>, context: &Context) -> Result<Value,
             let mut new_context = Context::new();
 
             for (index, parameter) in parameters.iter().enumerate() {
-                let argument = eval_arguments.get(index).ok_or(TypeError {
-                    message: String::from("missing function parameter"),
+                let argument = eval_arguments.get(index).ok_or(RuntimeError {
+                    message: String::from("missing function argument"),
+                    full_text: format!(
+                        "no argument supplied for the `{}` parameter",
+                        parameter.text
+                    ),
                     location: callee.location().clone(),
                 })?;
 
@@ -71,221 +101,102 @@ fn apply(callee: Term, arguments: Vec<Term>, context: &Context) -> Result<Value,
 
             eval(body, &context)
         }
-        Value::Int(_) => Err(TypeError {
-            message: String::from("int cannot be called as a function"),
-            location: callee.location().clone(),
-        }),
-        Value::Str(_) => Err(TypeError {
-            message: String::from("str cannot be called as a function"),
-            location: callee.location().clone(),
-        }),
-        Value::Bool(_) => Err(TypeError {
-            message: String::from("bool cannot be called as a function"),
-            location: callee.location().clone(),
-        }),
-        Value::Unit => Err(TypeError {
-            message: String::from("unit cannot be called as a function"),
+        value => Err(RuntimeError {
+            message: String::from("invalid function call"),
+            full_text: format!("{} cannot be called as a function", value),
             location: callee.location().clone(),
         }),
     }
 }
 
 impl Value {
-    pub fn eq(&self, value: &Value, location: &Location) -> Result<Value, TypeError> {
+    pub fn eq(&self, value: &Value, location: &Location) -> Result<Value, RuntimeError> {
         match (self, value) {
             (Value::Bool(l_bool), Value::Bool(r_bool)) => Ok(Value::Bool(l_bool == r_bool)),
             (Value::Str(l_str), Value::Str(r_str)) => Ok(Value::Bool(l_str == r_str)),
             (Value::Int(l_int), Value::Int(r_int)) => Ok(Value::Bool(l_int == r_int)),
-            (
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-            ) => Err(TypeError {
-                message: String::from("closures cannot be compared"),
-                location: location.clone(),
-            }),
-            (l_val, r_val) => Err(TypeError {
-                message: String::from("different types cannot be compared"),
-                location: location.clone(),
-            }),
+            (l_value, r_value) => Err(invalid_comparison(l_value, r_value, location)),
         }
     }
 
-    pub fn neq(&self, value: &Value, location: &Location) -> Result<Value, TypeError> {
+    pub fn neq(&self, value: &Value, location: &Location) -> Result<Value, RuntimeError> {
         match (self, value) {
             (Value::Bool(l_bool), Value::Bool(r_bool)) => Ok(Value::Bool(l_bool != r_bool)),
             (Value::Str(l_str), Value::Str(r_str)) => Ok(Value::Bool(l_str != r_str)),
             (Value::Int(l_int), Value::Int(r_int)) => Ok(Value::Bool(l_int != r_int)),
-            (
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-            ) => Err(TypeError {
-                message: String::from("closures cannot be compared"),
-                location: location.clone(),
-            }),
-            (l_val, r_val) => Err(TypeError {
-                message: String::from("different types cannot be compared"),
-                location: location.clone(),
-            }),
+            (l_value, r_value) => Err(invalid_comparison(l_value, r_value, location)),
         }
     }
 
-    pub fn lt(&self, value: &Value, location: &Location) -> Result<Value, TypeError> {
+    pub fn lt(&self, value: &Value, location: &Location) -> Result<Value, RuntimeError> {
         match (self, value) {
             (Value::Bool(l_bool), Value::Bool(r_bool)) => Ok(Value::Bool(l_bool < r_bool)),
             (Value::Str(l_str), Value::Str(r_str)) => Ok(Value::Bool(l_str < r_str)),
             (Value::Int(l_int), Value::Int(r_int)) => Ok(Value::Bool(l_int < r_int)),
-            (
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-            ) => Err(TypeError {
-                message: String::from("closures cannot be compared"),
-                location: location.clone(),
-            }),
-            (l_val, r_val) => Err(TypeError {
-                message: String::from("different types cannot be compared"),
-                location: location.clone(),
-            }),
+            (l_value, r_value) => Err(invalid_comparison(l_value, r_value, location)),
         }
     }
 
-    pub fn lte(&self, value: &Value, location: &Location) -> Result<Value, TypeError> {
+    pub fn lte(&self, value: &Value, location: &Location) -> Result<Value, RuntimeError> {
         match (self, value) {
             (Value::Bool(l_bool), Value::Bool(r_bool)) => Ok(Value::Bool(l_bool <= r_bool)),
             (Value::Str(l_str), Value::Str(r_str)) => Ok(Value::Bool(l_str <= r_str)),
             (Value::Int(l_int), Value::Int(r_int)) => Ok(Value::Bool(l_int <= r_int)),
-            (
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-            ) => Err(TypeError {
-                message: String::from("closures cannot be compared"),
-                location: location.clone(),
-            }),
-            (l_val, r_val) => Err(TypeError {
-                message: String::from("different types cannot be compared"),
-                location: location.clone(),
-            }),
+            (l_value, r_value) => Err(invalid_comparison(l_value, r_value, location)),
         }
     }
 
-    pub fn gt(&self, value: &Value, location: &Location) -> Result<Value, TypeError> {
+    pub fn gt(&self, value: &Value, location: &Location) -> Result<Value, RuntimeError> {
         match (self, value) {
             (Value::Bool(l_bool), Value::Bool(r_bool)) => Ok(Value::Bool(l_bool > r_bool)),
             (Value::Str(l_str), Value::Str(r_str)) => Ok(Value::Bool(l_str > r_str)),
             (Value::Int(l_int), Value::Int(r_int)) => Ok(Value::Bool(l_int > r_int)),
-            (
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-            ) => Err(TypeError {
-                message: String::from("closures cannot be compared"),
-                location: location.clone(),
-            }),
-            (l_val, r_val) => Err(TypeError {
-                message: String::from("different types cannot be used on the same operation"),
-                location: location.clone(),
-            }),
+            (l_value, r_value) => Err(invalid_comparison(l_value, r_value, location)),
         }
     }
 
-    pub fn gte(&self, value: &Value, location: &Location) -> Result<Value, TypeError> {
+    pub fn gte(&self, value: &Value, location: &Location) -> Result<Value, RuntimeError> {
         match (self, value) {
             (Value::Bool(l_bool), Value::Bool(r_bool)) => Ok(Value::Bool(l_bool >= r_bool)),
             (Value::Str(l_str), Value::Str(r_str)) => Ok(Value::Bool(l_str >= r_str)),
             (Value::Int(l_int), Value::Int(r_int)) => Ok(Value::Bool(l_int >= r_int)),
-            (
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-            ) => Err(TypeError {
-                message: String::from("closures cannot be compared"),
-                location: location.clone(),
-            }),
-            (l_val, r_val) => Err(TypeError {
-                message: String::from("different types cannot be used on the same operation"),
-                location: location.clone(),
-            }),
+            (l_value, r_value) => Err(invalid_comparison(l_value, r_value, location)),
         }
     }
 
-    pub fn and(&self, value: &Value, location: &Location) -> Result<Value, TypeError> {
+    pub fn and(&self, value: &Value, location: &Location) -> Result<Value, RuntimeError> {
         match (self, value) {
             (Value::Bool(l_bool), Value::Bool(r_bool)) => Ok(Value::Bool(*l_bool && *r_bool)),
-            (l_val, r_val) => Err(TypeError {
-                message: String::from(
-                    "only booleans can be used on && (AND) short-circuit operation",
-                ),
+            (_l_val, _r_val) => Err(RuntimeError {
+                message: String::from("invalid binary operation"),
+                full_text: format!("only booleans can be used on short-circuit operations"),
                 location: location.clone(),
             }),
         }
     }
 
-    pub fn or(&self, value: &Value, location: &Location) -> Result<Value, TypeError> {
+    pub fn or(&self, value: &Value, location: &Location) -> Result<Value, RuntimeError> {
         match (self, value) {
             (Value::Bool(l_bool), Value::Bool(r_bool)) => Ok(Value::Bool(*l_bool || *r_bool)),
-            (l_val, r_val) => Err(TypeError {
-                message: String::from(
-                    "only booleans can be used on || (OR) short-circuit operation",
-                ),
+            (_l_val, _r_val) => Err(RuntimeError {
+                message: String::from("invalid binary operation"),
+                full_text: format!("only booleans can be used on short-circuit operations"),
                 location: location.clone(),
             }),
         }
     }
 
-    pub fn add(&self, value: &Value, location: &Location) -> Result<Value, TypeError> {
+    pub fn add(&self, value: &Value, location: &Location) -> Result<Value, RuntimeError> {
         match (self, value) {
             (Value::Int(l_int), Value::Int(r_int)) => Ok(Value::Int(l_int + r_int)),
-            (Value::Str(l_bool), Value::Str(r_bool)) => Err(TypeError {
-                message: String::from("strings cannot be added"),
+            (Value::Str(_l_bool), Value::Str(_r_bool)) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("strings cannot be added"),
                 location: location.clone(),
             }),
-            (Value::Bool(l_bool), Value::Bool(r_bool)) => Err(TypeError {
-                message: String::from("booleans cannot be added"),
+            (Value::Bool(_l_bool), Value::Bool(_r_bool)) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("booleans cannot be added"),
                 location: location.clone(),
             }),
             (
@@ -299,26 +210,30 @@ impl Value {
                     body: _,
                     context: _,
                 },
-            ) => Err(TypeError {
-                message: String::from("closures cannot be added"),
+            ) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("closures cannot be added"),
                 location: location.clone(),
             }),
-            (l_val, r_val) => Err(TypeError {
-                message: String::from("different types cannot be used on the same operation"),
+            (_l_val, _r_val) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("different types cannot be used on the same operation"),
                 location: location.clone(),
             }),
         }
     }
 
-    pub fn sub(&self, value: &Value, location: &Location) -> Result<Value, TypeError> {
+    pub fn sub(&self, value: &Value, location: &Location) -> Result<Value, RuntimeError> {
         match (self, value) {
             (Value::Int(l_int), Value::Int(r_int)) => Ok(Value::Int(l_int - r_int)),
-            (Value::Str(l_bool), Value::Str(r_bool)) => Err(TypeError {
-                message: String::from("strings cannot be subtracted"),
+            (Value::Str(_l_bool), Value::Str(_r_bool)) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("strings cannot be subtracted"),
                 location: location.clone(),
             }),
-            (Value::Bool(l_bool), Value::Bool(r_bool)) => Err(TypeError {
-                message: String::from("booleans cannot be subtracted"),
+            (Value::Bool(_l_bool), Value::Bool(_r_bool)) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("booleans cannot be subtracted"),
                 location: location.clone(),
             }),
             (
@@ -332,26 +247,30 @@ impl Value {
                     body: _,
                     context: _,
                 },
-            ) => Err(TypeError {
-                message: String::from("closures cannot be subtracted"),
+            ) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("closures cannot be subtracted"),
                 location: location.clone(),
             }),
-            (l_val, r_val) => Err(TypeError {
-                message: String::from("different types cannot be used on the same operation"),
+            (_l_val, _r_val) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("different types cannot be used on the same operation"),
                 location: location.clone(),
             }),
         }
     }
 
-    pub fn mul(&self, value: &Value, location: &Location) -> Result<Value, TypeError> {
+    pub fn mul(&self, value: &Value, location: &Location) -> Result<Value, RuntimeError> {
         match (self, value) {
             (Value::Int(l_int), Value::Int(r_int)) => Ok(Value::Int(l_int - r_int)),
-            (Value::Str(l_bool), Value::Str(r_bool)) => Err(TypeError {
-                message: String::from("strings cannot be multiplied"),
+            (Value::Str(_l_bool), Value::Str(_r_bool)) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("strings cannot be multiplied"),
                 location: location.clone(),
             }),
-            (Value::Bool(l_bool), Value::Bool(r_bool)) => Err(TypeError {
-                message: String::from("booleans cannot be multiplied"),
+            (Value::Bool(_l_bool), Value::Bool(_r_bool)) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("booleans cannot be multiplied"),
                 location: location.clone(),
             }),
             (
@@ -365,26 +284,30 @@ impl Value {
                     body: _,
                     context: _,
                 },
-            ) => Err(TypeError {
-                message: String::from("closures cannot be multiplied"),
+            ) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("closures cannot be multiplied"),
                 location: location.clone(),
             }),
-            (l_val, r_val) => Err(TypeError {
-                message: String::from("different types cannot be used on the same operation"),
+            (_l_val, _r_val) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("different types cannot be used on the same operation"),
                 location: location.clone(),
             }),
         }
     }
 
-    pub fn div(&self, value: &Value, location: &Location) -> Result<Value, TypeError> {
+    pub fn div(&self, value: &Value, location: &Location) -> Result<Value, RuntimeError> {
         match (self, value) {
             (Value::Int(l_int), Value::Int(r_int)) => Ok(Value::Int(l_int / r_int)),
-            (Value::Str(l_bool), Value::Str(r_bool)) => Err(TypeError {
-                message: String::from("strings cannot be divided"),
+            (Value::Str(_l_bool), Value::Str(_r_bool)) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("strings cannot be divided"),
                 location: location.clone(),
             }),
-            (Value::Bool(l_bool), Value::Bool(r_bool)) => Err(TypeError {
-                message: String::from("booleans cannot be divided"),
+            (Value::Bool(_l_bool), Value::Bool(_r_bool)) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("booleans cannot be divided"),
                 location: location.clone(),
             }),
             (
@@ -398,26 +321,30 @@ impl Value {
                     body: _,
                     context: _,
                 },
-            ) => Err(TypeError {
-                message: String::from("closures cannot be divided"),
+            ) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("closures cannot be divided"),
                 location: location.clone(),
             }),
-            (l_val, r_val) => Err(TypeError {
-                message: String::from("different types cannot be used on the same operation"),
+            (_l_val, _r_val) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("different types cannot be used on the same operation"),
                 location: location.clone(),
             }),
         }
     }
 
-    pub fn rem(&self, value: &Value, location: &Location) -> Result<Value, TypeError> {
+    pub fn rem(&self, value: &Value, location: &Location) -> Result<Value, RuntimeError> {
         match (self, value) {
             (Value::Int(l_int), Value::Int(r_int)) => Ok(Value::Int(l_int / r_int)),
-            (Value::Str(l_bool), Value::Str(r_bool)) => Err(TypeError {
-                message: String::from("strings cannot be used with rem"),
+            (Value::Str(_l_bool), Value::Str(_r_bool)) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("strings cannot be used with rem"),
                 location: location.clone(),
             }),
-            (Value::Bool(l_bool), Value::Bool(r_bool)) => Err(TypeError {
-                message: String::from("booleans cannot be used with rem"),
+            (Value::Bool(_l_bool), Value::Bool(_r_bool)) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("booleans cannot be used with rem"),
                 location: location.clone(),
             }),
             (
@@ -431,20 +358,23 @@ impl Value {
                     body: _,
                     context: _,
                 },
-            ) => Err(TypeError {
-                message: String::from("closures cannot be used with rem"),
+            ) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("closures cannot be used with rem"),
                 location: location.clone(),
             }),
-            (l_val, r_val) => Err(TypeError {
-                message: String::from("different types cannot be used on the same operation"),
+            (_l_val, _r_val) => Err(RuntimeError {
+                message: String::from("invalid numeric operation"),
+                full_text: String::from("different types cannot be used on the same operation"),
                 location: location.clone(),
             }),
         }
     }
 }
 
-pub fn eval(term: Term, context: &Context) -> Result<Value, TypeError> {
+pub fn eval(term: Term, context: &Context) -> Result<Value, RuntimeError> {
     match term {
+        Term::Error(err) => Err(RuntimeError::from(err)),
         Term::Let(Let {
             name,
             value,
@@ -477,27 +407,14 @@ pub fn eval(term: Term, context: &Context) -> Result<Value, TypeError> {
             location: _,
         }) => {
             let condition_value = eval(*condition.clone(), context)?;
-
             let condition = match condition_value {
                 Value::Bool(bool) => Ok(bool),
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                } => Err(TypeError {
-                    message: String::from("closure cannot be used as if conditions"),
-                    location: condition.location().clone(),
-                }),
-                Value::Int(_int) => Err(TypeError {
-                    message: String::from("if cannot be used as if condition"),
-                    location: condition.location().clone(),
-                }),
-                Value::Str(_str) => Err(TypeError {
-                    message: String::from("string cannot be used as if condition"),
-                    location: condition.location().clone(),
-                }),
-                Value::Unit => Err(TypeError {
-                    message: String::from("unit cannot be used as if condition"),
+                _ => Err(RuntimeError {
+                    message: String::from("invalid if condition"),
+                    full_text: format!(
+                        "{} can't be used as an if condition. use a boolean instead",
+                        condition_value
+                    ),
                     location: condition.location().clone(),
                 }),
             }?;
@@ -508,40 +425,71 @@ pub fn eval(term: Term, context: &Context) -> Result<Value, TypeError> {
             }
         }
         Term::Binary(Binary {
-            left,
+            lhs,
             op,
-            right,
-            location,
+            rhs,
+            location: _,
         }) => {
-            let l_value = eval(*left, context)?;
-            let r_value = eval(*right, context)?;
+            let l_value = eval(*lhs.clone(), context)?;
+            let r_value = eval(*rhs.clone(), context)?;
 
             match op {
-                BinaryOperator::Eq => l_value.eq(&r_value, left.location()),
-                BinaryOperator::Neq => l_value.neq(&r_value, left.location()),
-                BinaryOperator::Lt => l_value.lt(&r_value, left.location()),
-                BinaryOperator::Lte => l_value.lte(&r_value, left.location()),
-                BinaryOperator::Gt => l_value.gt(&r_value, left.location()),
-                BinaryOperator::Gte => l_value.gte(&r_value, left.location()),
-                BinaryOperator::And => l_value.and(&r_value, left.location()),
-                BinaryOperator::Or => l_value.or(&r_value, left.location()),
-                BinaryOperator::Add => l_value.add(&r_value, left.location()),
-                BinaryOperator::Sub => l_value.sub(&r_value, left.location()),
-                BinaryOperator::Mul => l_value.mul(&r_value, left.location()),
-                BinaryOperator::Div => l_value.div(&r_value, left.location()),
-                BinaryOperator::Rem => l_value.rem(&r_value, left.location()),
+                BinaryOp::Eq => l_value.eq(&r_value, lhs.location()),
+                BinaryOp::Neq => l_value.neq(&r_value, lhs.location()),
+                BinaryOp::Lt => l_value.lt(&r_value, lhs.location()),
+                BinaryOp::Lte => l_value.lte(&r_value, lhs.location()),
+                BinaryOp::Gt => l_value.gt(&r_value, lhs.location()),
+                BinaryOp::Gte => l_value.gte(&r_value, lhs.location()),
+                BinaryOp::And => l_value.and(&r_value, lhs.location()),
+                BinaryOp::Or => l_value.or(&r_value, lhs.location()),
+                BinaryOp::Add => l_value.add(&r_value, lhs.location()),
+                BinaryOp::Sub => l_value.sub(&r_value, lhs.location()),
+                BinaryOp::Mul => l_value.mul(&r_value, lhs.location()),
+                BinaryOp::Div => l_value.div(&r_value, lhs.location()),
+                BinaryOp::Rem => l_value.rem(&r_value, lhs.location()),
             }
         }
         Term::Var(var) => {
-            let var_value = context.get(&var.0.text).ok_or(TypeError {
-                message: format!("unbound variable {}", &var.0.text),
-                location: var.0.location,
+            let var_value = context.get(&var.text).ok_or(RuntimeError {
+                message: String::from("unbound variabe"),
+                full_text: format!("no variable `{}` found on the current context", var.text),
+                location: var.location,
             })?;
 
             Ok(var_value.clone())
         }
         Term::Int(int) => Ok(Value::Int(int.value)),
-        Term::Str(str) => Ok(Value::Str(str.0.text)),
+        Term::Str(str) => Ok(Value::Str(str.value)),
+        Term::Bool(bool) => Ok(Value::Bool(bool.value)),
+        Term::Tuple(Tuple {
+            first,
+            second,
+            location: _,
+        }) => {
+            let first = eval(*first, context)?;
+            let second = eval(*second, context)?;
+
+            Ok(Value::Tuple {
+                first: Box::new(first),
+                second: Box::new(second),
+            })
+        }
+        Term::First(First { value, location }) => match eval(*value, context)? {
+            Value::Tuple { first, second: _ } => Ok(*first),
+            _value => Err(RuntimeError {
+                message: String::from("invalid expression"),
+                full_text: String::from("cannot use first operation from anything but a tuple"),
+                location,
+            }),
+        },
+        Term::Second(Second { value, location }) => match eval(*value, context)? {
+            Value::Tuple { first: _, second } => Ok(*second),
+            _value => Err(RuntimeError {
+                message: String::from("invalid expression"),
+                full_text: String::from("cannot use second operation from anything but a tuple"),
+                location,
+            }),
+        },
         Term::Print(print) => {
             let print_value = eval(*print.value, context)?;
             println!("{}", print_value);
