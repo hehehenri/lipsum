@@ -2,11 +2,11 @@ use im::hashmap::HashMap;
 use std::fmt::Display;
 
 use crate::ast::{
-    Binary, BinaryOp, Call, Element, Error, First, Function, If, Let, Location, Second, Term,
+    Binary, BinaryOp, Call, Element, Error, File, First, Function, If, Let, Location, Second, Term,
     Tuple, Var,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Value {
     Closure {
         parameters: Vec<Var>,
@@ -44,8 +44,9 @@ impl Display for Value {
     }
 }
 
-type Context = HashMap<String, Value>;
+pub type Context = HashMap<String, Value>;
 
+#[derive(Debug)]
 pub struct RuntimeError {
     pub message: String,
     pub full_text: String,
@@ -372,7 +373,7 @@ impl Value {
     }
 }
 
-pub fn eval(term: Term, context: &Context) -> Result<Value, RuntimeError> {
+fn eval(term: Term, context: &Context) -> Result<Value, RuntimeError> {
     match term {
         Term::Error(err) => Err(RuntimeError::from(err)),
         Term::Let(Let {
@@ -497,4 +498,10 @@ pub fn eval(term: Term, context: &Context) -> Result<Value, RuntimeError> {
             Ok(Value::Unit)
         }
     }
+}
+
+pub fn eval_file(file: File) -> Result<Value, RuntimeError> {
+    let context = Context::new();
+
+    eval(file.expression, &context)
 }
