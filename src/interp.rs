@@ -2,7 +2,7 @@ use im::hashmap::HashMap;
 use std::fmt::Display;
 
 use crate::ast::{
-    Binary, BinaryOp, Call, Element, Error, File, First, Function, If, Let, Location, Second, Term,
+    Binary, BinaryOp, Call, Element, File, First, Function, If, Let, Location, Print, Second, Term,
     Tuple, Var,
 };
 
@@ -10,7 +10,7 @@ use crate::ast::{
 pub enum Value {
     Closure {
         parameters: Vec<Var>,
-        body: Term,
+        body: Box<Term>,
         context: Context,
     },
     Int(i32),
@@ -53,60 +53,11 @@ pub struct RuntimeError {
     pub location: Location,
 }
 
-impl From<crate::ast::Error> for RuntimeError {
-    fn from(error: Error) -> Self {
-        RuntimeError {
-            message: error.message,
-            full_text: error.full_text,
-            location: error.location,
-        }
-    }
-}
-
 fn invalid_comparison(l_value: &Value, r_value: &Value, location: &Location) -> RuntimeError {
     RuntimeError {
         message: String::from("invalid comparison"),
         full_text: format!("{} and {} cannot be compared", l_value, r_value),
         location: location.clone(),
-    }
-}
-
-fn apply(callee: Term, arguments: Vec<Term>, context: &Context) -> Result<Value, RuntimeError> {
-    let eval_arguments: Vec<Value> = arguments
-        .iter()
-        .map(|arg| eval(arg.clone(), context))
-        .collect::<Result<_, _>>()?;
-
-    match eval(callee.clone(), context)? {
-        Value::Closure {
-            parameters,
-            body,
-            context,
-        } => {
-            let mut new_context = Context::new();
-
-            for (index, parameter) in parameters.iter().enumerate() {
-                let argument = eval_arguments.get(index).ok_or(RuntimeError {
-                    message: String::from("missing function argument"),
-                    full_text: format!(
-                        "no argument supplied for the `{}` parameter",
-                        parameter.text
-                    ),
-                    location: callee.location().clone(),
-                })?;
-
-                new_context.insert(parameter.text.clone(), argument.clone());
-            }
-
-            let context = new_context.union(context);
-
-            eval(body, &context)
-        }
-        value => Err(RuntimeError {
-            message: String::from("invalid function call"),
-            full_text: format!("{} cannot be called as a function", value),
-            location: callee.location().clone(),
-        }),
     }
 }
 
@@ -373,135 +324,156 @@ impl Value {
     }
 }
 
-fn eval(term: Term, context: &Context) -> Result<Value, RuntimeError> {
-    match term {
-        Term::Error(err) => Err(RuntimeError::from(err)),
-        Term::Let(Let {
-            name,
-            value,
-            next,
-            location: _,
-        }) => {
-            let value = eval(*value, context)?;
-            let context = context.update(name.text, value);
+fn eval_let(let_: Let, context: &Context) -> Result<Value, RuntimeError> {
+    let value = eval(let_.value, context)?;
+    let context = context.update(let_.name.text, value);
 
-            eval(*next, &context)
+    eval(let_.next, &context)
+}
+
+fn eval_call(call: Call, context: &Context) -> Result<Value, RuntimeError> {
+    match eval(call.callee, context)? {
+        Value::Closure {
+            parameters,
+            body,
+            context: closure_context,
+        } => {
+            let mut new_context = context.clone();
+
+            for (parameter, argument) in parameters.iter().zip(call.arguments) {
+                new_context.insert(parameter.text.clone(), eval(Box::new(argument), context)?);
+            }
+
+            let _ = new_context.union(closure_context);
+
+            eval(body, &context)
         }
+        value => Err(RuntimeError {
+            message: String::from("invalid function call"),
+            full_text: format!("{} cannot be called as a function", value),
+            location: call.location,
+        }),
+    }
+}
+
+fn eval_if(if_: If, context: &Context) -> Result<Value, RuntimeError> {
+    let condition_result = eval(if_.condition.clone(), context)?;
+    let condition = match condition_result {
+        Value::Bool(bool) => Ok(bool),
+        _ => Err(RuntimeError {
+            message: String::from("invalid if condition"),
+            full_text: format!(
+                "{} can't be used as an if condition. use a boolean instead",
+                condition_result
+            ),
+            location: if_.condition.location().clone(),
+        }),
+    }?;
+
+    match condition {
+        true => eval(if_.then, context),
+        false => eval(if_.otherwise, context),
+    }
+}
+
+fn eval_binary(binary: Binary, context: &Context) -> Result<Value, RuntimeError> {
+    let l_value = eval(binary.lhs.clone(), context)?;
+    let r_value = eval(binary.rhs, context)?;
+
+    match binary.op {
+        BinaryOp::Eq => l_value.eq(&r_value, binary.lhs.location()),
+        BinaryOp::Neq => l_value.neq(&r_value, binary.lhs.location()),
+        BinaryOp::Lt => l_value.lt(&r_value, binary.lhs.location()),
+        BinaryOp::Lte => l_value.lte(&r_value, binary.lhs.location()),
+        BinaryOp::Gt => l_value.gt(&r_value, binary.lhs.location()),
+        BinaryOp::Gte => l_value.gte(&r_value, binary.lhs.location()),
+        BinaryOp::And => l_value.and(&r_value, binary.lhs.location()),
+        BinaryOp::Or => l_value.or(&r_value, binary.lhs.location()),
+        BinaryOp::Add => l_value.add(&r_value, binary.lhs.location()),
+        BinaryOp::Sub => l_value.sub(&r_value, binary.lhs.location()),
+        BinaryOp::Mul => l_value.mul(&r_value, binary.lhs.location()),
+        BinaryOp::Div => l_value.div(&r_value, binary.lhs.location()),
+        BinaryOp::Rem => l_value.rem(&r_value, binary.lhs.location()),
+    }
+}
+
+fn eval_var(var: Var, context: &Context) -> Result<Value, RuntimeError> {
+    let var_value = context.get(&var.text).ok_or(RuntimeError {
+        message: String::from("unbound variabe"),
+        full_text: format!("no variable `{}` found on the current context", var.text),
+        location: var.location,
+    })?;
+
+    Ok(var_value.clone())
+}
+
+fn eval_tuple(tuple: Tuple, context: &Context) -> Result<Value, RuntimeError> {
+    let first = eval(tuple.first, context)?;
+    let second = eval(tuple.second, context)?;
+
+    Ok(Value::Tuple {
+        first: Box::new(first),
+        second: Box::new(second),
+    })
+}
+
+fn eval_first(first: First, context: &Context) -> Result<Value, RuntimeError> {
+    match eval(first.value, context)? {
+        Value::Tuple { first, second: _ } => Ok(*first),
+        _value => Err(RuntimeError {
+            message: String::from("invalid expression"),
+            full_text: String::from("cannot use first operation from anything but a tuple"),
+            location: first.location,
+        }),
+    }
+}
+
+fn eval_second(second: Second, context: &Context) -> Result<Value, RuntimeError> {
+    match eval(second.value, context)? {
+        Value::Tuple { first: _, second } => Ok(*second),
+        _value => Err(RuntimeError {
+            message: String::from("invalid expression"),
+            full_text: String::from("cannot use second operation from anything but a tuple"),
+            location: second.location,
+        }),
+    }
+}
+
+fn eval_print(print: Print, context: &Context) -> Result<Value, RuntimeError> {
+    let print_value = eval(print.value, context)?;
+    println!("{}", print_value);
+
+    Ok(Value::Unit)
+}
+
+fn eval(term: Box<Term>, context: &Context) -> Result<Value, RuntimeError> {
+    match *term {
+        Term::Let(let_) => eval_let(let_, context),
+        Term::Int(int) => Ok(Value::Int(int.value)),
+        Term::Str(str) => Ok(Value::Str(str.value)),
+        Term::Bool(bool) => Ok(Value::Bool(bool.value)),
         Term::Function(Function {
             parameters,
             value,
             location: _,
         }) => Ok(Value::Closure {
             parameters,
-            body: *value,
+            body: value,
             context: context.clone(),
         }),
-        Term::Call(Call {
-            callee,
-            arguments,
-            location: _,
-        }) => apply(*callee, arguments, context),
-        Term::If(If {
-            condition,
-            then,
-            otherwise,
-            location: _,
-        }) => {
-            let condition_value = eval(*condition.clone(), context)?;
-            let condition = match condition_value {
-                Value::Bool(bool) => Ok(bool),
-                _ => Err(RuntimeError {
-                    message: String::from("invalid if condition"),
-                    full_text: format!(
-                        "{} can't be used as an if condition. use a boolean instead",
-                        condition_value
-                    ),
-                    location: condition.location().clone(),
-                }),
-            }?;
-
-            match condition {
-                true => eval(*then, context),
-                false => eval(*otherwise, context),
-            }
-        }
-        Term::Binary(Binary {
-            lhs,
-            op,
-            rhs,
-            location: _,
-        }) => {
-            let l_value = eval(*lhs.clone(), context)?;
-            let r_value = eval(*rhs.clone(), context)?;
-
-            match op {
-                BinaryOp::Eq => l_value.eq(&r_value, lhs.location()),
-                BinaryOp::Neq => l_value.neq(&r_value, lhs.location()),
-                BinaryOp::Lt => l_value.lt(&r_value, lhs.location()),
-                BinaryOp::Lte => l_value.lte(&r_value, lhs.location()),
-                BinaryOp::Gt => l_value.gt(&r_value, lhs.location()),
-                BinaryOp::Gte => l_value.gte(&r_value, lhs.location()),
-                BinaryOp::And => l_value.and(&r_value, lhs.location()),
-                BinaryOp::Or => l_value.or(&r_value, lhs.location()),
-                BinaryOp::Add => l_value.add(&r_value, lhs.location()),
-                BinaryOp::Sub => l_value.sub(&r_value, lhs.location()),
-                BinaryOp::Mul => l_value.mul(&r_value, lhs.location()),
-                BinaryOp::Div => l_value.div(&r_value, lhs.location()),
-                BinaryOp::Rem => l_value.rem(&r_value, lhs.location()),
-            }
-        }
-        Term::Var(var) => {
-            let var_value = context.get(&var.text).ok_or(RuntimeError {
-                message: String::from("unbound variabe"),
-                full_text: format!("no variable `{}` found on the current context", var.text),
-                location: var.location,
-            })?;
-
-            Ok(var_value.clone())
-        }
-        Term::Int(int) => Ok(Value::Int(int.value)),
-        Term::Str(str) => Ok(Value::Str(str.value)),
-        Term::Bool(bool) => Ok(Value::Bool(bool.value)),
-        Term::Tuple(Tuple {
-            first,
-            second,
-            location: _,
-        }) => {
-            let first = eval(*first, context)?;
-            let second = eval(*second, context)?;
-
-            Ok(Value::Tuple {
-                first: Box::new(first),
-                second: Box::new(second),
-            })
-        }
-        Term::First(First { value, location }) => match eval(*value, context)? {
-            Value::Tuple { first, second: _ } => Ok(*first),
-            _value => Err(RuntimeError {
-                message: String::from("invalid expression"),
-                full_text: String::from("cannot use first operation from anything but a tuple"),
-                location,
-            }),
-        },
-        Term::Second(Second { value, location }) => match eval(*value, context)? {
-            Value::Tuple { first: _, second } => Ok(*second),
-            _value => Err(RuntimeError {
-                message: String::from("invalid expression"),
-                full_text: String::from("cannot use second operation from anything but a tuple"),
-                location,
-            }),
-        },
-        Term::Print(print) => {
-            let print_value = eval(*print.value, context)?;
-            println!("{}", print_value);
-
-            Ok(Value::Unit)
-        }
+        Term::Call(call) => eval_call(call, context),
+        Term::If(if_) => eval_if(if_, context),
+        Term::Binary(binary) => eval_binary(binary, context),
+        Term::Var(var) => eval_var(var, context),
+        Term::Tuple(tuple) => eval_tuple(tuple, context),
+        Term::First(first) => eval_first(first, context),
+        Term::Second(second) => eval_second(second, context),
+        Term::Print(print) => eval_print(print, context),
     }
 }
 
 pub fn eval_file(file: File) -> Result<Value, RuntimeError> {
     let context = Context::new();
 
-    eval(file.expression, &context)
+    eval(Box::new(file.expression), &context)
 }

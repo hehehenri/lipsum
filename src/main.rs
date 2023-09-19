@@ -1,10 +1,7 @@
+use rinha::{interp::eval_file, parse};
+
 fn main() {
-    let file_name = "fib.json";
-    let mut source = String::new();
+    let file_ast = parse("fib.json").unwrap();
 
-    std::fs::read_to_string(&mut source);
-
-    let ast = parser::parse(source).unwrap();
-
-    dbg!(ast);
+    let _ = eval_file(file_ast).unwrap();
 }
