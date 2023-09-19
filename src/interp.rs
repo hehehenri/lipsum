@@ -1,9 +1,8 @@
-use im::hashmap::HashMap;
-use std::fmt::Display;
+use std::{collections::HashMap, fmt::Display};
 
 use crate::ast::{
-    Binary, BinaryOp, Call, Element, Error, File, First, Function, If, Let, Location, Second, Term,
-    Tuple, Var,
+    Binary, BinaryOp, Call, Element, File, First, Function, If, Let, Location, Second, Term, Tuple,
+    Var,
 };
 
 #[derive(Clone, Debug)]
@@ -30,14 +29,14 @@ impl Display for Value {
                 parameters: _,
                 body: _,
                 context: _,
-            } => String::from("[closure]"),
+            } => "<#closure>".to_string(),
+            Self::Str(str) => str.clone(),
             Self::Int(int) => int.to_string(),
-            Self::Str(str) => str.to_string(),
             Self::Bool(bool) => bool.to_string(),
             Self::Tuple { first, second } => {
                 format!("({}, {})", first.to_string(), second.to_string())
             }
-            Self::Unit => String::from("unit"),
+            Self::Unit => "()".to_string(),
         };
 
         f.write_str(&value)
@@ -53,16 +52,6 @@ pub struct RuntimeError {
     pub location: Location,
 }
 
-impl From<crate::ast::Error> for RuntimeError {
-    fn from(error: Error) -> Self {
-        RuntimeError {
-            message: error.message,
-            full_text: error.full_text,
-            location: error.location,
-        }
-    }
-}
-
 fn invalid_comparison(l_value: &Value, r_value: &Value, location: &Location) -> RuntimeError {
     RuntimeError {
         message: String::from("invalid comparison"),
@@ -71,41 +60,26 @@ fn invalid_comparison(l_value: &Value, r_value: &Value, location: &Location) -> 
     }
 }
 
-fn apply(callee: Term, arguments: Vec<Term>, context: &Context) -> Result<Value, RuntimeError> {
-    let eval_arguments: Vec<Value> = arguments
-        .iter()
-        .map(|arg| eval(arg.clone(), context))
-        .collect::<Result<_, _>>()?;
-
-    match eval(callee.clone(), context)? {
+fn eval_call(call: Call, context: &mut Context) -> Result<Value, RuntimeError> {
+    match eval(*call.callee, context)? {
         Value::Closure {
             parameters,
             body,
-            context,
+            context: closure_context,
         } => {
-            let mut new_context = Context::new();
+            let mut new_context = context.clone();
+            new_context.extend(closure_context);
 
-            for (index, parameter) in parameters.iter().enumerate() {
-                let argument = eval_arguments.get(index).ok_or(RuntimeError {
-                    message: String::from("missing function argument"),
-                    full_text: format!(
-                        "no argument supplied for the `{}` parameter",
-                        parameter.text
-                    ),
-                    location: callee.location().clone(),
-                })?;
-
-                new_context.insert(parameter.text.clone(), argument.clone());
+            for (parameter, argument) in parameters.iter().zip(call.arguments) {
+                new_context.insert(parameter.text.clone(), eval(argument, context)?);
             }
 
-            let context = new_context.union(context);
-
-            eval(body, &context)
+            eval(body, &mut new_context)
         }
         value => Err(RuntimeError {
             message: String::from("invalid function call"),
             full_text: format!("{} cannot be called as a function", value),
-            location: callee.location().clone(),
+            location: call.location,
         }),
     }
 }
@@ -373,9 +347,8 @@ impl Value {
     }
 }
 
-fn eval(term: Term, context: &Context) -> Result<Value, RuntimeError> {
+fn eval(term: Term, context: &mut Context) -> Result<Value, RuntimeError> {
     match term {
-        Term::Error(err) => Err(RuntimeError::from(err)),
         Term::Let(Let {
             name,
             value,
@@ -383,9 +356,9 @@ fn eval(term: Term, context: &Context) -> Result<Value, RuntimeError> {
             location: _,
         }) => {
             let value = eval(*value, context)?;
-            let context = context.update(name.text, value);
+            context.insert(name.text, value);
 
-            eval(*next, &context)
+            eval(*next, context)
         }
         Term::Function(Function {
             parameters,
@@ -396,11 +369,7 @@ fn eval(term: Term, context: &Context) -> Result<Value, RuntimeError> {
             body: *value,
             context: context.clone(),
         }),
-        Term::Call(Call {
-            callee,
-            arguments,
-            location: _,
-        }) => apply(*callee, arguments, context),
+        Term::Call(call) => eval_call(call, context),
         Term::If(If {
             condition,
             then,
@@ -501,7 +470,7 @@ fn eval(term: Term, context: &Context) -> Result<Value, RuntimeError> {
 }
 
 pub fn eval_file(file: File) -> Result<Value, RuntimeError> {
-    let context = Context::new();
+    let mut context = Context::new();
 
-    eval(file.expression, &context)
+    eval(file.expression, &mut context)
 }

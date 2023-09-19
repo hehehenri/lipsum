@@ -51,25 +51,6 @@ pub trait Element {
     fn location(&self) -> &Location;
 }
 
-/// Error node, it does contains an error.
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct Error {
-    /// The error message.
-    pub message: String,
-
-    /// The original text that originated the error.
-    pub full_text: String,
-
-    /// The location of the error.
-    pub location: Location,
-}
-
-impl Element for Error {
-    fn location(&self) -> &Location {
-        &self.location
-    }
-}
-
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Var {
     pub text: String,
@@ -250,7 +231,6 @@ impl Element for Tuple {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "kind")]
 pub enum Term {
-    Error(Error),
     Int(Int),
     Str(Str),
     Call(Call),
@@ -269,7 +249,6 @@ pub enum Term {
 impl Element for Term {
     fn location(&self) -> &Location {
         match self {
-            Term::Error(arg0) => &arg0.location,
             Term::Int(arg0) => &arg0.location,
             Term::Str(arg0) => &arg0.location,
             Term::Function(arg0) => &arg0.location,
