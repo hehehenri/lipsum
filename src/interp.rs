@@ -1,9 +1,12 @@
 use im::hashmap::HashMap;
 use std::fmt::Display;
 
-use crate::ast::{
-    Binary, BinaryOp, Call, Element, File, First, Function, If, Let, Location, Print, Second, Term,
-    Var,
+use crate::{
+    ast::{
+        Binary, BinaryOp, Call, Element, File, First, Function, If, Let, Location, Print, Second,
+        Term, Var,
+    },
+    log,
 };
 
 #[derive(Clone, Debug)]
@@ -433,7 +436,7 @@ fn eval_second(second: Second, context: &Context) -> Result<Value, RuntimeError>
 
 fn eval_print(print: Print, context: &Context) -> Result<Value, RuntimeError> {
     let print_value = eval(print.value, context)?;
-    println!("{}", print_value);
+    log(&format!("{}", print_value));
 
     Ok(Value::Unit)
 }
