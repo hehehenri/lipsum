@@ -3,39 +3,45 @@ use std::fmt::Display;
 
 use crate::ast::{
     Binary, BinaryOp, Call, Element, File, First, Function, If, Let, Location, Print, Second, Term,
-    Tuple, Var,
+    Var,
 };
 
 #[derive(Clone, Debug)]
+pub struct Closure {
+    parameters: Vec<Var>,
+    body: Box<Term>,
+    context: Context,
+}
+
+#[derive(Clone, Debug)]
+pub struct Tuple {
+    first: Box<Value>,
+    second: Box<Value>,
+}
+
+#[derive(Clone, Debug)]
 pub enum Value {
-    Closure {
-        parameters: Vec<Var>,
-        body: Box<Term>,
-        context: Context,
-    },
+    Closure(Closure),
     Int(i32),
     Str(String),
     Bool(bool),
-    Tuple {
-        first: Box<Value>,
-        second: Box<Value>,
-    },
+    Tuple(Tuple),
     Unit,
 }
 
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let value = match self {
-            Self::Closure {
-                parameters: _,
-                body: _,
-                context: _,
-            } => String::from("[closure]"),
+            Self::Closure(_closure) => String::from("[closure]"),
             Self::Int(int) => int.to_string(),
             Self::Str(str) => str.to_string(),
             Self::Bool(bool) => bool.to_string(),
-            Self::Tuple { first, second } => {
-                format!("({}, {})", first.to_string(), second.to_string())
+            Self::Tuple(tuple) => {
+                format!(
+                    "({}, {})",
+                    tuple.first.to_string(),
+                    tuple.second.to_string()
+                )
             }
             Self::Unit => String::from("unit"),
         };
@@ -44,7 +50,7 @@ impl Display for Value {
     }
 }
 
-pub type Context = HashMap<String, Value>;
+type Context = HashMap<String, Value>;
 
 #[derive(Debug)]
 pub struct RuntimeError {
@@ -151,18 +157,7 @@ impl Value {
                 full_text: String::from("booleans cannot be added"),
                 location: location.clone(),
             }),
-            (
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-            ) => Err(RuntimeError {
+            (Value::Closure(_l_closure), Value::Closure(_r_closure)) => Err(RuntimeError {
                 message: String::from("invalid numeric operation"),
                 full_text: String::from("closures cannot be added"),
                 location: location.clone(),
@@ -188,18 +183,7 @@ impl Value {
                 full_text: String::from("booleans cannot be subtracted"),
                 location: location.clone(),
             }),
-            (
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-            ) => Err(RuntimeError {
+            (Value::Closure(_l_closure), Value::Closure(_r_closure)) => Err(RuntimeError {
                 message: String::from("invalid numeric operation"),
                 full_text: String::from("closures cannot be subtracted"),
                 location: location.clone(),
@@ -225,18 +209,7 @@ impl Value {
                 full_text: String::from("booleans cannot be multiplied"),
                 location: location.clone(),
             }),
-            (
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-            ) => Err(RuntimeError {
+            (Value::Closure(_l_closure), Value::Closure(_r_closure)) => Err(RuntimeError {
                 message: String::from("invalid numeric operation"),
                 full_text: String::from("closures cannot be multiplied"),
                 location: location.clone(),
@@ -262,18 +235,7 @@ impl Value {
                 full_text: String::from("booleans cannot be divided"),
                 location: location.clone(),
             }),
-            (
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-            ) => Err(RuntimeError {
+            (Value::Closure(_l_closure), Value::Closure(_r_closure)) => Err(RuntimeError {
                 message: String::from("invalid numeric operation"),
                 full_text: String::from("closures cannot be divided"),
                 location: location.clone(),
@@ -299,18 +261,7 @@ impl Value {
                 full_text: String::from("booleans cannot be used with rem"),
                 location: location.clone(),
             }),
-            (
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-                Value::Closure {
-                    parameters: _,
-                    body: _,
-                    context: _,
-                },
-            ) => Err(RuntimeError {
+            (Value::Closure(_l_closure), Value::Closure(_r_closure)) => Err(RuntimeError {
                 message: String::from("invalid numeric operation"),
                 full_text: String::from("closures cannot be used with rem"),
                 location: location.clone(),
@@ -331,22 +282,59 @@ fn eval_let(let_: Let, context: &Context) -> Result<Value, RuntimeError> {
     eval(let_.next, &context)
 }
 
-fn eval_call(call: Call, context: &Context) -> Result<Value, RuntimeError> {
-    match eval(call.callee, context)? {
-        Value::Closure {
-            parameters,
-            body,
-            context: closure_context,
-        } => {
-            let mut new_context = context.clone();
+fn update_context(
+    parameters: &[Var],
+    arguments: &[Term],
+    acc: Context,
+    location: Location,
+) -> Result<Context, RuntimeError> {
+    match (parameters, arguments) {
+        ([], [_]) | ([_], []) | ([], [_, ..]) | ([_, ..], []) => Err(RuntimeError {
+            message: String::from("invalid arguments"),
+            full_text: format!(
+                "expecting {} arguments but got {}",
+                parameters.len(),
+                arguments.len()
+            ),
+            location,
+        }),
+        ([], []) => Ok(acc),
+        ([parameter], [argument]) => {
+            let argument = eval(Box::new(argument.clone()), &acc)?;
 
-            for (parameter, argument) in parameters.iter().zip(call.arguments) {
-                new_context.insert(parameter.text.clone(), eval(Box::new(argument), context)?);
-            }
+            Ok(acc.update(parameter.text.clone(), argument))
+        }
+        ([parameter, parameters @ ..], [argument, arguments @ ..]) => {
+            let argument = eval(Box::new(argument.clone()), &acc)?;
 
-            let _ = new_context.union(closure_context);
+            let acc = acc.update(parameter.text.clone(), argument);
 
-            eval(body, &context)
+            update_context(parameters, arguments, acc, location)
+        }
+    }
+}
+
+fn eval_call(call: Call, context: Context) -> Result<Value, RuntimeError> {
+    match eval(call.callee, &context)? {
+        Value::Closure(closure) => {
+            // TODO: using this approach, closure would have access to values defined before and
+            // after the current scope, i.e:
+            //
+            // let x = 3;
+            // let function = () => {y};
+            // let y = 4;
+            // print(function()): 4
+
+            let context = closure.context.union(context);
+
+            let context = update_context(
+                closure.parameters.as_slice(),
+                call.arguments.as_slice(),
+                context,
+                call.location,
+            )?;
+
+            eval(closure.body, &context)
         }
         value => Err(RuntimeError {
             message: String::from("invalid function call"),
@@ -398,28 +386,32 @@ fn eval_binary(binary: Binary, context: &Context) -> Result<Value, RuntimeError>
 }
 
 fn eval_var(var: Var, context: &Context) -> Result<Value, RuntimeError> {
-    let var_value = context.get(&var.text).ok_or(RuntimeError {
-        message: String::from("unbound variabe"),
-        full_text: format!("no variable `{}` found on the current context", var.text),
-        location: var.location,
-    })?;
-
-    Ok(var_value.clone())
+    context
+        .get(&var.text)
+        .ok_or(RuntimeError {
+            message: format!("unbound variable \"{}\"", var.text),
+            full_text: format!(
+                "variable \"{}\" was not defined in the current scope",
+                var.text
+            ),
+            location: var.location,
+        })
+        .map(|value| value.clone())
 }
 
-fn eval_tuple(tuple: Tuple, context: &Context) -> Result<Value, RuntimeError> {
+fn eval_tuple(tuple: crate::ast::Tuple, context: &Context) -> Result<Value, RuntimeError> {
     let first = eval(tuple.first, context)?;
     let second = eval(tuple.second, context)?;
 
-    Ok(Value::Tuple {
+    Ok(Value::Tuple(Tuple {
         first: Box::new(first),
         second: Box::new(second),
-    })
+    }))
 }
 
 fn eval_first(first: First, context: &Context) -> Result<Value, RuntimeError> {
     match eval(first.value, context)? {
-        Value::Tuple { first, second: _ } => Ok(*first),
+        Value::Tuple(Tuple { first, second: _ }) => Ok(*first),
         _value => Err(RuntimeError {
             message: String::from("invalid expression"),
             full_text: String::from("cannot use first operation from anything but a tuple"),
@@ -430,7 +422,7 @@ fn eval_first(first: First, context: &Context) -> Result<Value, RuntimeError> {
 
 fn eval_second(second: Second, context: &Context) -> Result<Value, RuntimeError> {
     match eval(second.value, context)? {
-        Value::Tuple { first: _, second } => Ok(*second),
+        Value::Tuple(Tuple { first: _, second }) => Ok(*second),
         _value => Err(RuntimeError {
             message: String::from("invalid expression"),
             full_text: String::from("cannot use second operation from anything but a tuple"),
@@ -456,12 +448,12 @@ fn eval(term: Box<Term>, context: &Context) -> Result<Value, RuntimeError> {
             parameters,
             value,
             location: _,
-        }) => Ok(Value::Closure {
+        }) => Ok(Value::Closure(Closure {
             parameters,
             body: value,
             context: context.clone(),
-        }),
-        Term::Call(call) => eval_call(call, context),
+        })),
+        Term::Call(call) => eval_call(call, context.clone()),
         Term::If(if_) => eval_if(if_, context),
         Term::Binary(binary) => eval_binary(binary, context),
         Term::Var(var) => eval_var(var, context),
@@ -473,7 +465,7 @@ fn eval(term: Box<Term>, context: &Context) -> Result<Value, RuntimeError> {
 }
 
 pub fn eval_file(file: File) -> Result<Value, RuntimeError> {
-    let context = Context::new();
+    let context = Context::default();
 
     eval(Box::new(file.expression), &context)
 }
