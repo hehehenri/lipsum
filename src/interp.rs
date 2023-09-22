@@ -15,6 +15,7 @@ pub struct Closure {
     parameters: Vec<Var>,
     body: Box<Term>,
     context: Context,
+    is_pure: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -33,10 +34,6 @@ pub enum Value {
     Unit,
 }
 
-type CacheKey = (Term, Vec<String>);
-
-type Cache = std::collections::HashMap<CacheKey, Value>;
-
 impl Hash for Value {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
@@ -46,6 +43,10 @@ impl Hash for Value {
         }
     }
 }
+
+type CacheKey = (Term, Vec<String>);
+
+type Cache = std::collections::HashMap<CacheKey, Value>;
 
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -342,7 +343,7 @@ fn eval_arguments<'a>(
     }
 }
 
-fn cache_key(body: Box<Term>, arguments: Vec<Value>) -> Option<Key> {
+fn cache_key(body: Box<Term>, arguments: Vec<Value>) -> Option<CacheKey> {
     let arguments: Option<Vec<String>> = arguments
         .into_iter()
         .map(|argument| match argument {
@@ -361,11 +362,11 @@ fn cache_key(body: Box<Term>, arguments: Vec<Value>) -> Option<Key> {
 
 fn eval_body(
     body: Box<Term>,
-    arguments: Vec<Value>,
+    _arguments: Vec<Value>,
     context: &Context,
     cache: &mut Cache,
 ) -> Result<Value, RuntimeError> {
-    // TODO: use cache
+    // TODO: use cache to apply memoization
     eval(body, &context, cache)
 }
 
@@ -506,21 +507,30 @@ fn eval_print(print: Print, context: &Context, cache: &mut Cache) -> Result<Valu
     Ok(Value::Unit)
 }
 
+fn is_pure(term: &Term) -> bool {
+    match term {
+        Term::Function(function) => is_pure(&function.value),
+        Term::Print(_) => false,
+        _ => true,
+    }
+}
+
+fn eval_function(function: Function, context: &Context) -> Result<Value, RuntimeError> {
+    Ok(Value::Closure(Closure {
+        is_pure: is_pure(&*function.value),
+        parameters: function.parameters,
+        body: function.value.clone(),
+        context: context.clone(),
+    }))
+}
+
 fn eval(term: Box<Term>, context: &Context, cache: &mut Cache) -> Result<Value, RuntimeError> {
     match *term {
         Term::Let(let_) => eval_let(let_, context, cache),
         Term::Int(int) => Ok(Value::Int(int.value)),
         Term::Str(str) => Ok(Value::Str(str.value)),
         Term::Bool(bool) => Ok(Value::Bool(bool.value)),
-        Term::Function(Function {
-            parameters,
-            value,
-            location: _,
-        }) => Ok(Value::Closure(Closure {
-            parameters,
-            body: value,
-            context: context.clone(),
-        })),
+        Term::Function(function) => eval_function(function, context),
         Term::Call(call) => eval_call(call, context.clone(), cache),
         Term::If(if_) => eval_if(if_, context, cache),
         Term::Binary(binary) => eval_binary(binary, context, cache),
@@ -537,4 +547,70 @@ pub fn eval_file(file: File) -> Result<Value, RuntimeError> {
     let mut cache = Cache::new();
 
     eval(Box::new(file.expression), &context, &mut cache)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ast::{Function, Int, Location, Print, Term};
+
+    use super::is_pure;
+
+    fn location() -> Location {
+        Location {
+            start: 0,
+            end: 0,
+            filename: "tests".to_string(),
+        }
+    }
+
+    fn int() -> Box<Term> {
+        Box::new(Term::Int(Int {
+            value: 5,
+            location: location(),
+        }))
+    }
+
+    fn function(term: Box<Term>) -> Box<Term> {
+        Box::new(Term::Function(Function {
+            parameters: vec![],
+            value: term,
+            location: location(),
+        }))
+    }
+
+    fn print() -> Box<Term> {
+        Box::new(Term::Print(Print {
+            value: Box::new(Term::Int(Int {
+                value: 1,
+                location: location(),
+            })),
+            location: location(),
+        }))
+    }
+
+    #[test]
+    fn can_infer_function_is_pure() {
+        let pure_function = function(int());
+
+        let is_pure = is_pure(&pure_function);
+        assert!(is_pure);
+    }
+
+    #[test]
+    fn can_infer_function_is_inpure() {
+        // () => print(5)
+        let inpure_function = *function(print());
+
+        let is_pure = is_pure(&inpure_function);
+        assert!(!is_pure);
+    }
+
+    #[test]
+    fn can_infer_two_levels_function_is_inpure() {
+        // () => print(5)
+        let inpure_function = function(function(print()));
+        let is_pure = is_pure(&inpure_function);
+
+        assert!(!is_pure);
+    }
 }
