@@ -1,5 +1,9 @@
 use im::hashmap::HashMap;
-use std::fmt::Display;
+use std::{
+    collections::hash_map::DefaultHasher,
+    fmt::Display,
+    hash::{Hash, Hasher},
+};
 
 use crate::ast::{
     Binary, BinaryOp, Call, Element, File, First, Function, If, Let, Location, Print, Second, Term,
@@ -27,6 +31,20 @@ pub enum Value {
     Bool(bool),
     Tuple(Tuple),
     Unit,
+}
+
+type CacheKey = (Term, Vec<String>);
+
+type Cache = std::collections::HashMap<CacheKey, Value>;
+
+impl Hash for Value {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            // TODO: this is so fucking bad
+            Self::Closure(_closure) => panic!("this should never be executed"),
+            value => value.hash(state),
+        }
+    }
 }
 
 impl Display for Value {
@@ -275,16 +293,16 @@ impl Value {
     }
 }
 
-fn eval_let(let_: Let, context: &Context) -> Result<Value, RuntimeError> {
-    let value = eval(let_.value, context)?;
+fn eval_let(let_: Let, context: &Context, cache: &mut Cache) -> Result<Value, RuntimeError> {
+    let value = eval(let_.value, context, cache)?;
     let context = context.update(let_.name.text, value);
 
-    eval(let_.next, &context)
+    eval(let_.next, &context, cache)
 }
 
 fn update_context(
     parameters: &[Var],
-    arguments: &[Term],
+    arguments: &[Value],
     acc: Context,
     location: Location,
 ) -> Result<Context, RuntimeError> {
@@ -299,23 +317,60 @@ fn update_context(
             location,
         }),
         ([], []) => Ok(acc),
-        ([parameter], [argument]) => {
-            let argument = eval(Box::new(argument.clone()), &acc)?;
-
-            Ok(acc.update(parameter.text.clone(), argument))
-        }
+        ([parameter], [argument]) => Ok(acc.update(parameter.text.clone(), argument.clone())),
         ([parameter, parameters @ ..], [argument, arguments @ ..]) => {
-            let argument = eval(Box::new(argument.clone()), &acc)?;
-
-            let acc = acc.update(parameter.text.clone(), argument);
+            let acc = acc.update(parameter.text.clone(), argument.clone());
 
             update_context(parameters, arguments, acc, location)
         }
     }
 }
 
-fn eval_call(call: Call, context: Context) -> Result<Value, RuntimeError> {
-    match eval(call.callee, &context)? {
+fn eval_arguments<'a>(
+    arguments: &'a [Term],
+    acc: Vec<Value>,
+    context: &Context,
+    cache: &mut Cache,
+) -> Result<Vec<Value>, RuntimeError> {
+    match arguments {
+        [] => Ok(acc),
+        [argument, arguments @ ..] => {
+            let argument = eval(Box::new(argument.clone()), context, cache)?;
+            let acc = [acc, vec![argument]].concat();
+            eval_arguments(arguments, acc, context, cache)
+        }
+    }
+}
+
+fn cache_key(body: Box<Term>, arguments: Vec<Value>) -> Option<Key> {
+    let arguments: Option<Vec<String>> = arguments
+        .into_iter()
+        .map(|argument| match argument {
+            Value::Closure(_) => None,
+            value => {
+                // TODO: is ok to define the hasher on each iteration?
+                let mut s = DefaultHasher::new();
+                value.hash(&mut s);
+                Some(s.finish().to_string())
+            }
+        })
+        .collect();
+
+    Some((*body.clone(), arguments?))
+}
+
+fn eval_body(
+    body: Box<Term>,
+    arguments: Vec<Value>,
+    context: &Context,
+    cache: &mut Cache,
+) -> Result<Value, RuntimeError> {
+    // TODO: use cache
+    eval(body, &context, cache)
+}
+
+fn eval_call(call: Call, context: Context, cache: &mut Cache) -> Result<Value, RuntimeError> {
+    match eval(call.callee, &context, cache)? {
         Value::Closure(closure) => {
             // TODO: using this approach, closure would have access to values defined before and
             // after the current scope, i.e:
@@ -326,15 +381,16 @@ fn eval_call(call: Call, context: Context) -> Result<Value, RuntimeError> {
             // print(function()): 4
 
             let context = closure.context.union(context);
+            let arguments = eval_arguments(call.arguments.as_slice(), vec![], &context, cache)?;
 
             let context = update_context(
                 closure.parameters.as_slice(),
-                call.arguments.as_slice(),
+                arguments.as_slice(),
                 context,
                 call.location,
             )?;
 
-            eval(closure.body, &context)
+            eval_body(closure.body, arguments, &context, cache)
         }
         value => Err(RuntimeError {
             message: String::from("invalid function call"),
@@ -344,8 +400,8 @@ fn eval_call(call: Call, context: Context) -> Result<Value, RuntimeError> {
     }
 }
 
-fn eval_if(if_: If, context: &Context) -> Result<Value, RuntimeError> {
-    let condition_result = eval(if_.condition.clone(), context)?;
+fn eval_if(if_: If, context: &Context, cache: &mut Cache) -> Result<Value, RuntimeError> {
+    let condition_result = eval(if_.condition.clone(), context, cache)?;
     let condition = match condition_result {
         Value::Bool(bool) => Ok(bool),
         _ => Err(RuntimeError {
@@ -359,14 +415,18 @@ fn eval_if(if_: If, context: &Context) -> Result<Value, RuntimeError> {
     }?;
 
     match condition {
-        true => eval(if_.then, context),
-        false => eval(if_.otherwise, context),
+        true => eval(if_.then, context, cache),
+        false => eval(if_.otherwise, context, cache),
     }
 }
 
-fn eval_binary(binary: Binary, context: &Context) -> Result<Value, RuntimeError> {
-    let l_value = eval(binary.lhs.clone(), context)?;
-    let r_value = eval(binary.rhs, context)?;
+fn eval_binary(
+    binary: Binary,
+    context: &Context,
+    cache: &mut Cache,
+) -> Result<Value, RuntimeError> {
+    let l_value = eval(binary.lhs.clone(), context, cache)?;
+    let r_value = eval(binary.rhs, context, cache)?;
 
     match binary.op {
         BinaryOp::Eq => l_value.eq(&r_value, binary.lhs.location()),
@@ -399,9 +459,13 @@ fn eval_var(var: Var, context: &Context) -> Result<Value, RuntimeError> {
         .map(|value| value.clone())
 }
 
-fn eval_tuple(tuple: crate::ast::Tuple, context: &Context) -> Result<Value, RuntimeError> {
-    let first = eval(tuple.first, context)?;
-    let second = eval(tuple.second, context)?;
+fn eval_tuple(
+    tuple: crate::ast::Tuple,
+    context: &Context,
+    cache: &mut Cache,
+) -> Result<Value, RuntimeError> {
+    let first = eval(tuple.first, context, cache)?;
+    let second = eval(tuple.second, context, cache)?;
 
     Ok(Value::Tuple(Tuple {
         first: Box::new(first),
@@ -409,8 +473,8 @@ fn eval_tuple(tuple: crate::ast::Tuple, context: &Context) -> Result<Value, Runt
     }))
 }
 
-fn eval_first(first: First, context: &Context) -> Result<Value, RuntimeError> {
-    match eval(first.value, context)? {
+fn eval_first(first: First, context: &Context, cache: &mut Cache) -> Result<Value, RuntimeError> {
+    match eval(first.value, context, cache)? {
         Value::Tuple(Tuple { first, second: _ }) => Ok(*first),
         _value => Err(RuntimeError {
             message: String::from("invalid expression"),
@@ -420,8 +484,12 @@ fn eval_first(first: First, context: &Context) -> Result<Value, RuntimeError> {
     }
 }
 
-fn eval_second(second: Second, context: &Context) -> Result<Value, RuntimeError> {
-    match eval(second.value, context)? {
+fn eval_second(
+    second: Second,
+    context: &Context,
+    cache: &mut Cache,
+) -> Result<Value, RuntimeError> {
+    match eval(second.value, context, cache)? {
         Value::Tuple(Tuple { first: _, second }) => Ok(*second),
         _value => Err(RuntimeError {
             message: String::from("invalid expression"),
@@ -431,16 +499,16 @@ fn eval_second(second: Second, context: &Context) -> Result<Value, RuntimeError>
     }
 }
 
-fn eval_print(print: Print, context: &Context) -> Result<Value, RuntimeError> {
-    let print_value = eval(print.value, context)?;
+fn eval_print(print: Print, context: &Context, cache: &mut Cache) -> Result<Value, RuntimeError> {
+    let print_value = eval(print.value, context, cache)?;
     println!("{}", print_value);
 
     Ok(Value::Unit)
 }
 
-fn eval(term: Box<Term>, context: &Context) -> Result<Value, RuntimeError> {
+fn eval(term: Box<Term>, context: &Context, cache: &mut Cache) -> Result<Value, RuntimeError> {
     match *term {
-        Term::Let(let_) => eval_let(let_, context),
+        Term::Let(let_) => eval_let(let_, context, cache),
         Term::Int(int) => Ok(Value::Int(int.value)),
         Term::Str(str) => Ok(Value::Str(str.value)),
         Term::Bool(bool) => Ok(Value::Bool(bool.value)),
@@ -453,19 +521,20 @@ fn eval(term: Box<Term>, context: &Context) -> Result<Value, RuntimeError> {
             body: value,
             context: context.clone(),
         })),
-        Term::Call(call) => eval_call(call, context.clone()),
-        Term::If(if_) => eval_if(if_, context),
-        Term::Binary(binary) => eval_binary(binary, context),
+        Term::Call(call) => eval_call(call, context.clone(), cache),
+        Term::If(if_) => eval_if(if_, context, cache),
+        Term::Binary(binary) => eval_binary(binary, context, cache),
         Term::Var(var) => eval_var(var, context),
-        Term::Tuple(tuple) => eval_tuple(tuple, context),
-        Term::First(first) => eval_first(first, context),
-        Term::Second(second) => eval_second(second, context),
-        Term::Print(print) => eval_print(print, context),
+        Term::Tuple(tuple) => eval_tuple(tuple, context, cache),
+        Term::First(first) => eval_first(first, context, cache),
+        Term::Second(second) => eval_second(second, context, cache),
+        Term::Print(print) => eval_print(print, context, cache),
     }
 }
 
 pub fn eval_file(file: File) -> Result<Value, RuntimeError> {
-    let context = Context::default();
+    let context = Context::new();
+    let mut cache = Cache::new();
 
-    eval(Box::new(file.expression), &context)
+    eval(Box::new(file.expression), &context, &mut cache)
 }
