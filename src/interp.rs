@@ -24,6 +24,15 @@ pub struct Tuple {
     second: Box<Value>,
 }
 
+impl Display for Tuple {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let first = self.first.clone();
+        let second = self.second.clone();
+
+        write!(f, "({first}, {second})")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Value {
     Closure(Closure),
@@ -37,16 +46,17 @@ pub enum Value {
 impl Hash for Value {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
-            // TODO: this is so fucking bad
             Self::Closure(_closure) => panic!("this should never be executed"),
-            value => value.hash(state),
+            Self::Int(int) => format!("Int({int})").hash(state),
+            Self::Str(string) => format!("Str({string})").hash(state),
+            Self::Bool(bool) => format!("Bool({bool})").hash(state),
+            Self::Tuple(tuple) => format!("Tuple({tuple})").hash(state),
+            Self::Unit => "Unit".hash(state),
         }
     }
 }
 
-type CacheKey = (Term, Vec<String>);
-
-type Cache = std::collections::HashMap<CacheKey, Value>;
+type Cache = std::collections::HashMap<String, Value>;
 
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -343,31 +353,44 @@ fn eval_arguments<'a>(
     }
 }
 
-fn cache_key(body: Box<Term>, arguments: Vec<Value>) -> Option<CacheKey> {
-    let arguments: Option<Vec<String>> = arguments
+fn cache_key(body: &Box<Term>, arguments: Vec<Value>) -> Option<String> {
+    let arguments = arguments
         .into_iter()
         .map(|argument| match argument {
             Value::Closure(_) => None,
             value => {
-                // TODO: is ok to define the hasher on each iteration?
                 let mut s = DefaultHasher::new();
+                // TODO: is ok to define the hasher on each iteration?
                 value.hash(&mut s);
                 Some(s.finish().to_string())
             }
         })
-        .collect();
+        .collect::<Option<Vec<String>>>()?;
 
-    Some((*body.clone(), arguments?))
+    let mut s = DefaultHasher::new();
+    (*body.clone(), arguments).hash(&mut s);
+
+    Some(s.finish().to_string())
 }
 
-fn eval_body(
+fn memo_eval(
     body: Box<Term>,
-    _arguments: Vec<Value>,
+    arguments: Vec<Value>,
     context: &Context,
     cache: &mut Cache,
 ) -> Result<Value, RuntimeError> {
-    // TODO: use cache to apply memoization
-    eval(body, &context, cache)
+    match cache_key(&body, arguments.clone()) {
+        Some(cache_key) => match cache.get(&cache_key) {
+            Some(cached_value) => Ok(cached_value.clone()),
+            None => {
+                let value = eval(body, &context, cache)?;
+                cache.insert(cache_key, value.clone());
+
+                Ok(value)
+            }
+        },
+        None => eval(body, &context, cache),
+    }
 }
 
 fn eval_call(call: Call, context: Context, cache: &mut Cache) -> Result<Value, RuntimeError> {
@@ -391,7 +414,10 @@ fn eval_call(call: Call, context: Context, cache: &mut Cache) -> Result<Value, R
                 call.location,
             )?;
 
-            eval_body(closure.body, arguments, &context, cache)
+            match is_pure(&closure.body) {
+                true => memo_eval(closure.body, arguments, &context, cache),
+                false => eval(closure.body, &context, cache),
+            }
         }
         value => Err(RuntimeError {
             message: String::from("invalid function call"),
