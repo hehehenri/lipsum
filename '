@@ -572,382 +572,303 @@ pub fn eval_file(file: File) -> Result<Value, RuntimeError> {
     eval(Box::new(file.expression), &context, &mut cache)
 }
 
-enum Bounce<'a> {
-    Let {
-        interpreter: &'a mut Interpreter,
-        let_: Let,
-    },
-    Function {
-        interpreter: &'a mut Interpreter,
-        function: Function,
-    },
-    Call {
-        interpreter: &'a mut Interpreter,
-        call: Call,
-    },
-    If {
-        interpreter: &'a mut Interpreter,
-        if_: If,
-    },
-    Binary {
-        interpreter: &'a mut Interpreter,
-        binary: Binary,
-    },
-    Var {
-        interpreter: &'a mut Interpreter,
-        var: Var,
-    },
-    Tuple {
-        interpreter: &'a mut Interpreter,
-        tuple: crate::ast::Tuple,
-    },
-    First {
-        interpreter: &'a mut Interpreter,
-        first: First,
-    },
-    Second {
-        interpreter: &'a mut Interpreter,
-        second: Second,
-    },
-    Print {
-        interpreter: &'a mut Interpreter,
-        print: Print,
-    },
+enum Bounce {
+    Let(Rc<RefCell<Interpreter>>, Let),
 }
 
-fn bounce_let<'a>(
-    interpreter: &'a mut Interpreter,
-    let_: Let,
-) -> Result<Trampoline<'a>, RuntimeError> {
-    let value = interpreter.eval(let_.value.clone()).run()?;
-    interpreter.context = interpreter.context.update(let_.name.text.clone(), value);
-
-    Ok(interpreter.eval(let_.next))
-}
-
-fn bounce_function<'a>(
-    interpreter: &'a mut Interpreter,
-    function: Function,
-) -> Result<Trampoline<'a>, RuntimeError> {
-    Ok(Trampoline::Land(Ok(Value::Closure(Closure {
-        parameters: function.parameters,
-        body: function.value.clone(),
-        context: interpreter.context.clone(),
-    }))))
-}
-
-fn bounce_call<'a>(
-    interpreter: &'a mut Interpreter,
-    call: Call,
-) -> Result<Trampoline<'a>, RuntimeError> {
-    match interpreter.eval(call.callee).run()? {
-        Value::Closure(closure) => {
-            // TODO: using this approach, closure would have access to values defined before and
-            // after the current scope, i.e:
-            //
-            // let x = 3;
-            // let function = () => {y};
-            // let y = 4;
-            // print(function()): 4
-
-            let context = closure.context.union(interpreter.context.clone());
-            let arguments = eval_arguments(
-                call.arguments.as_slice(),
-                vec![],
-                &context,
-                &mut interpreter.cache,
-            )?;
-
-            let updated_context = update_context(
-                closure.parameters.as_slice(),
-                arguments.as_slice(),
-                context,
-                call.location,
-            )?;
-
-            interpreter.context = updated_context;
-
-            match is_pure(&closure.body) {
-                true => interpreter.memo_eval(closure.body, arguments),
-                false => Ok(interpreter.eval(closure.body)),
-            }
-        }
-        value => Err(RuntimeError {
-            message: String::from("invalid function call"),
-            full_text: format!("{} cannot be called as a function", value),
-            location: call.location,
-        }),
+impl Bounce {
+    pub fn run(&self) -> Result<Trampoline, RuntimeError> {
+        todo!()
     }
 }
 
-fn bounce_if<'a>(
-    interpreter: &'a mut Interpreter,
-    if_: If,
-) -> Result<Trampoline<'a>, RuntimeError> {
-    let condition = interpreter.eval(if_.condition.clone()).run()?;
-    let condition = match condition {
-        Value::Bool(bool) => Ok(bool),
-        _ => Err(RuntimeError {
-            message: String::from("invalid if condition"),
-            full_text: format!(
-                "{} can't be used as an if condition. use a boolean instead",
-                condition
-            ),
-            location: if_.condition.location().clone(),
-        }),
-    }?;
-
-    Ok(match condition {
-        true => interpreter.eval(if_.then),
-        false => interpreter.eval(if_.otherwise),
-    })
-}
-
-fn bounce_binary<'a>(
-    interpreter: &'a mut Interpreter,
-    binary: Binary,
-) -> Result<Trampoline<'a>, RuntimeError> {
-    let l_value = interpreter.eval(binary.lhs.clone()).run()?;
-    let r_value = interpreter.eval(binary.rhs).run()?;
-
-    let result = match binary.op {
-        BinaryOp::Eq => l_value.eq(&r_value, binary.lhs.location()),
-        BinaryOp::Neq => l_value.neq(&r_value, binary.lhs.location()),
-        BinaryOp::Lt => l_value.lt(&r_value, binary.lhs.location()),
-        BinaryOp::Lte => l_value.lte(&r_value, binary.lhs.location()),
-        BinaryOp::Gt => l_value.gt(&r_value, binary.lhs.location()),
-        BinaryOp::Gte => l_value.gte(&r_value, binary.lhs.location()),
-        BinaryOp::And => l_value.and(&r_value, binary.lhs.location()),
-        BinaryOp::Or => l_value.or(&r_value, binary.lhs.location()),
-        BinaryOp::Add => l_value.add(&r_value, binary.lhs.location()),
-        BinaryOp::Sub => l_value.sub(&r_value, binary.lhs.location()),
-        BinaryOp::Mul => l_value.mul(&r_value, binary.lhs.location()),
-        BinaryOp::Div => l_value.div(&r_value, binary.lhs.location()),
-        BinaryOp::Rem => l_value.rem(&r_value, binary.lhs.location()),
-    };
-
-    Ok(Trampoline::Land(result))
-}
-
-fn bounce_var<'a>(
-    interpreter: &'a mut Interpreter,
-    var: Var,
-) -> Result<Trampoline<'a>, RuntimeError> {
-    Ok(Trampoline::Land(
-        interpreter
-            .context
-            .get(&var.text)
-            .ok_or(RuntimeError {
-                message: format!("unbound variable \"{}\"", var.text),
-                full_text: format!(
-                    "variable \"{}\" was not defined in the current scope",
-                    var.text
-                ),
-                location: var.location,
-            })
-            .map(|value| value.clone()),
-    ))
-}
-
-fn bounce_tuple<'a>(
-    interpreter: &'a mut Interpreter,
-    tuple: crate::ast::Tuple,
-) -> Result<Trampoline<'a>, RuntimeError> {
-    let first = interpreter.eval(tuple.first).run()?;
-    let second = interpreter.eval(tuple.second).run()?;
-
-    Ok(Trampoline::Land(Ok(Value::Tuple(Tuple {
-        first: Box::new(first),
-        second: Box::new(second),
-    }))))
-}
-
-fn bounce_first<'a>(
-    interpreter: &'a mut Interpreter,
-    first: First,
-) -> Result<Trampoline<'a>, RuntimeError> {
-    let value = match interpreter.eval(first.value).run()? {
-        Value::Tuple(Tuple { first, second: _ }) => Ok(*first),
-        _value => Err(RuntimeError {
-            message: String::from("invalid expression"),
-            full_text: String::from("cannot use first operation from anything but a tuple"),
-            location: first.location,
-        }),
-    };
-
-    Ok(Trampoline::Land(value))
-}
-
-fn bounce_second<'a>(
-    interpreter: &'a mut Interpreter,
-    second: Second,
-) -> Result<Trampoline<'a>, RuntimeError> {
-    let value = match interpreter.eval(second.value).run()? {
-        Value::Tuple(Tuple { first: _, second }) => Ok(*second),
-        _value => Err(RuntimeError {
-            message: String::from("invalid expression"),
-            full_text: String::from("cannot use second operation from anything but a tuple"),
-            location: second.location,
-        }),
-    };
-
-    Ok(Trampoline::Land(value))
-}
-
-fn bounce_print<'a>(
-    interpreter: &'a mut Interpreter,
-    print: Print,
-) -> Result<Trampoline<'a>, RuntimeError> {
-    let print_value = interpreter.eval(print.value).run()?;
-    println!("{}", print_value.clone());
-
-    Ok(Trampoline::Land(Ok(print_value)))
-}
-
-impl<'a> Bounce<'a> {
-    pub fn run(self) -> Result<Trampoline<'a>, RuntimeError> {
-        match self {
-            Self::Let { interpreter, let_ } => bounce_let(interpreter, let_),
-            Self::Function {
-                interpreter,
-                function,
-            } => bounce_function(interpreter, function),
-            Self::Call { interpreter, call } => bounce_call(interpreter, call),
-            Self::If { interpreter, if_ } => bounce_if(interpreter, if_),
-            Self::Binary {
-                interpreter,
-                binary,
-            } => bounce_binary(interpreter, binary),
-            Self::Var { interpreter, var } => bounce_var(interpreter, var),
-            Self::Tuple { interpreter, tuple } => bounce_tuple(interpreter, tuple),
-            Self::First { interpreter, first } => bounce_first(interpreter, first),
-            Self::Second {
-                interpreter,
-                second,
-            } => bounce_second(interpreter, second),
-            Self::Print { interpreter, print } => bounce_print(interpreter, print),
-            _ => todo!(),
-        }
-    }
-}
-
-enum Trampoline<'a> {
-    Bounce(Bounce<'a>),
+enum Trampoline {
+    Bounce(Bounce),
     Land(Result<Value, RuntimeError>),
 }
 
-impl<'a> Trampoline<'a> {
-    pub fn run(self) -> Result<Value, RuntimeError> {
+impl Trampoline {
+    fn run(self) -> Result<Trampoline, RuntimeError> {
         let mut current_trampoline = self;
 
         loop {
             match current_trampoline {
-                Self::Bounce(bounce) => {
-                    current_trampoline = bounce.run()?;
+                Self::Bounce(pog) => {
+                    let trampoline = bounce;
+                    current_trampoline = trampoline;
                 }
                 Self::Land(result) => return result.clone(),
             }
         }
     }
-
-    pub fn let_(interpreter: &mut Interpreter, let_: Let) -> Trampoline {
-        Trampoline::Bounce(Bounce::Let { interpreter, let_ })
-    }
-
-    pub fn function(interpreter: &mut Interpreter, function: Function) -> Trampoline {
-        Trampoline::Bounce(Bounce::Function {
-            interpreter,
-            function,
-        })
-    }
-
-    pub fn call(interpreter: &mut Interpreter, call: Call) -> Trampoline {
-        Trampoline::Bounce(Bounce::Call { interpreter, call })
-    }
-
-    pub fn if_(interpreter: &mut Interpreter, if_: If) -> Trampoline {
-        Trampoline::Bounce(Bounce::If { interpreter, if_ })
-    }
-
-    pub fn binary(interpreter: &mut Interpreter, binary: Binary) -> Trampoline {
-        Trampoline::Bounce(Bounce::Binary {
-            interpreter,
-            binary,
-        })
-    }
-
-    pub fn var(interpreter: &mut Interpreter, var: Var) -> Trampoline {
-        Trampoline::Bounce(Bounce::Var { interpreter, var })
-    }
-
-    pub fn tuple(interpreter: &mut Interpreter, tuple: crate::ast::Tuple) -> Trampoline {
-        Trampoline::Bounce(Bounce::Tuple { interpreter, tuple })
-    }
-
-    pub fn first(interpreter: &mut Interpreter, first: First) -> Trampoline {
-        Trampoline::Bounce(Bounce::First { interpreter, first })
-    }
-
-    pub fn second(interpreter: &mut Interpreter, second: Second) -> Trampoline {
-        Trampoline::Bounce(Bounce::Second {
-            interpreter,
-            second,
-        })
-    }
-
-    pub fn print(interpreter: &mut Interpreter, print: Print) -> Trampoline {
-        Trampoline::Bounce(Bounce::Print { interpreter, print })
-    }
 }
 
-#[derive(Clone, Default)]
-pub struct Interpreter {
+#[derive(Clone)]
+struct Interpreter {
+    term: Box<Term>,
     context: Context,
     cache: Cache,
 }
 
 impl Interpreter {
-    fn memo_eval<'a>(
-        &'a mut self,
-        body: Box<Term>,
-        arguments: Vec<Value>,
-    ) -> Result<Trampoline<'a>, RuntimeError> {
-        match cache_key(&body, arguments.clone()) {
-            Some(cache_key) => match self.cache.get(&cache_key) {
-                Some(cached_value) => Ok(Trampoline::Land(Ok(cached_value.clone()))),
-                None => {
-                    let value = self.eval(body).run()?;
-                    self.cache.insert(cache_key, value.clone());
+    fn eval_let(&mut self, let_: Let) -> Trampoline {
+        // let mut context = self.context.clone();
 
-                    Ok(Trampoline::Land(Ok(value)))
-                }
-            },
-            None => Ok(self.eval(body)),
-        }
+        // Trampoline::Continue(Box::new(move || {
+        //     match self.eval(let_.value.clone()).run() {
+        //         Ok(value) => {
+        //             context = context.update(let_.name.text.clone(), value);
+        //             self.context = context;
+        //             self.eval(let_.next.clone())
+        //         }
+        //         err @ Err(_) => Trampoline::Done(err),
+        //     }
+        // }))
+        todo!()
     }
+
+    // fn eval_function(&self, function: Function) -> Trampoline {
+    //     Trampoline::Done(Ok(Value::Closure(Closure {
+    //         parameters: function.parameters,
+    //         body: function.value.clone(),
+    //         context: self.context.clone(),
+    //     })))
+    // }
+
+    // fn memo_eval(&mut self, body: Box<Term>, arguments: Vec<Value>) -> Trampoline {
+    //     match cache_key(&body, arguments.clone()) {
+    //         Some(cache_key) => match self.cache.get(&cache_key) {
+    //             Some(cached_value) => Trampoline::Done(Ok(cached_value.clone())),
+    //             None => Trampoline::Continue(Box::new(move || match self.eval(body).run() {
+    //                 Ok(value) => {
+    //                     self.cache.insert(cache_key, value.clone());
+
+    //                     Trampoline::Done(Ok(value))
+    //                 }
+    //                 err => Trampoline::Done(err),
+    //             })),
+    //         },
+    //         None => Trampoline::Continue(Box::new(move || self.eval(body))),
+    //     }
+    // }
+
+    // fn eval_arguments<'a>(
+    //     &mut self,
+    //     arguments: &'a [Term],
+    //     acc: Vec<Value>,
+    // ) -> Result<Vec<Value>, RuntimeError> {
+    //     match arguments {
+    //         [] => Ok(acc),
+    //         [argument, arguments @ ..] => {
+    //             let argument = self.eval(Box::new(argument.clone())).run()?;
+    //             let acc = [acc, vec![argument]].concat();
+    //             self.eval_arguments(arguments, acc)
+    //         }
+    //     }
+    // }
+
+    // fn eval_call(&mut self, call: Call) -> Trampoline {
+    //     Trampoline::Continue(Box::new(move || {
+    //         match self.eval(call.callee).run() {
+    //             Ok(value) => match value {
+    //                 Value::Closure(closure) => {
+    //                     // TODO: using this approach, closure would have access to values defined before and
+    //                     // after the current scope, i.e:
+    //                     //
+    //                     // let x = 3;
+    //                     // let function = () => {y};
+    //                     // let y = 4;
+    //                     // print(function()): 4
+
+    //                     let eval_closure = move || {
+    //                         let context = closure.context.union(self.context);
+    //                         let arguments =
+    //                             self.eval_arguments(call.arguments.as_slice(), vec![])?;
+
+    //                         let context = match update_context(
+    //                             closure.parameters.as_slice(),
+    //                             arguments.as_slice(),
+    //                             context,
+    //                             call.location,
+    //                         ) {
+    //                             Ok(context) => context,
+    //                             Err(err) => return Err(err),
+    //                         };
+
+    //                         match is_pure(&closure.body) {
+    //                             true => Ok(self.memo_eval(closure.body, arguments)),
+    //                             false => Ok(self.eval(closure.body)),
+    //                         }
+    //                     };
+
+    //                     match eval_closure() {
+    //                         Ok(trampoline) => trampoline,
+    //                         Err(err) => Trampoline::Done(Err(err)),
+    //                     }
+    //                 }
+    //                 value => Trampoline::Done(Err(RuntimeError {
+    //                     message: String::from("invalid function call"),
+    //                     full_text: format!("{} cannot be called as a function", value),
+    //                     location: call.location,
+    //                 })),
+    //             },
+    //             err => Trampoline::Done(err),
+    //         }
+    //     }))
+    // }
+
+    // fn eval_if(&mut self, if_: If) -> Trampoline {
+    //     Trampoline::Continue(Box::new(move || {
+    //         match self.eval(if_.condition.clone()).run() {
+    //             Ok(condition) => {
+    //                 let condition = match condition {
+    //                     Value::Bool(bool) => Ok(bool),
+    //                     _ => Err(RuntimeError {
+    //                         message: String::from("invalid if condition"),
+    //                         full_text: format!(
+    //                             "{} can't be used as an if condition. use a boolean instead",
+    //                             condition
+    //                         ),
+    //                         location: if_.condition.location().clone(),
+    //                     }),
+    //                 };
+    //                 match condition {
+    //                     Ok(condition) => match condition {
+    //                         true => self.eval(if_.then),
+    //                         false => self.eval(if_.otherwise),
+    //                     },
+    //                     Err(err) => Trampoline::Done(Err(err)),
+    //                 }
+    //             }
+    //             err => Trampoline::Done(err),
+    //         }
+    //     }))
+    // }
+
+    // fn eval_binary(&mut self, binary: Binary) -> Trampoline {
+    //     Trampoline::Continue(Box::new(move || {
+    //         let op_result = move || {
+    //             let l_value = self.eval(binary.lhs.clone()).run()?;
+    //             let r_value = self.eval(binary.rhs).run()?;
+
+    //             match binary.op {
+    //                 BinaryOp::Eq => l_value.eq(&r_value, binary.lhs.location()),
+    //                 BinaryOp::Neq => l_value.neq(&r_value, binary.lhs.location()),
+    //                 BinaryOp::Lt => l_value.lt(&r_value, binary.lhs.location()),
+    //                 BinaryOp::Lte => l_value.lte(&r_value, binary.lhs.location()),
+    //                 BinaryOp::Gt => l_value.gt(&r_value, binary.lhs.location()),
+    //                 BinaryOp::Gte => l_value.gte(&r_value, binary.lhs.location()),
+    //                 BinaryOp::And => l_value.and(&r_value, binary.lhs.location()),
+    //                 BinaryOp::Or => l_value.or(&r_value, binary.lhs.location()),
+    //                 BinaryOp::Add => l_value.add(&r_value, binary.lhs.location()),
+    //                 BinaryOp::Sub => l_value.sub(&r_value, binary.lhs.location()),
+    //                 BinaryOp::Mul => l_value.mul(&r_value, binary.lhs.location()),
+    //                 BinaryOp::Div => l_value.div(&r_value, binary.lhs.location()),
+    //                 BinaryOp::Rem => l_value.rem(&r_value, binary.lhs.location()),
+    //             }
+    //         };
+
+    //         Trampoline::Done(op_result())
+    //     }))
+    // }
+
+    // fn eval_var(&self, var: Var) -> Trampoline {
+    //     let value = self
+    //         .context
+    //         .get(&var.text)
+    //         .ok_or(RuntimeError {
+    //             message: format!("unbound variable \"{}\"", var.text),
+    //             full_text: format!(
+    //                 "variable \"{}\" was not defined in the current scope",
+    //                 var.text
+    //             ),
+    //             location: var.location,
+    //         })
+    //         .map(|value| value.clone());
+
+    //     Trampoline::Done(value)
+    // }
+
+    // fn eval_tuple(&mut self, tuple: crate::ast::Tuple) -> Trampoline {
+    //     Trampoline::Continue(Box::new(move || {
+    //         let tuple = move || {
+    //             let first = self.eval(tuple.first).run()?;
+    //             let second = self.eval(tuple.second).run()?;
+
+    //             Ok(Value::Tuple(Tuple {
+    //                 first: Box::new(first),
+    //                 second: Box::new(second),
+    //             }))
+    //         };
+
+    //         match tuple() {
+    //             Ok(tuple) => Trampoline::Done(Ok(tuple)),
+    //             err => Trampoline::Done(err),
+    //         }
+    //     }))
+    // }
+
+    // fn eval_first(&mut self, first: First) -> Trampoline {
+    //     Trampoline::Continue(Box::new(move || match self.eval(first.value).run() {
+    //         Ok(value) => match value {
+    //             Value::Tuple(Tuple { first, second: _ }) => Trampoline::Done(Ok(*first)),
+    //             _value => Trampoline::Done(Err(RuntimeError {
+    //                 message: String::from("invalid expression"),
+    //                 full_text: String::from("cannot use first operation from anything but a tuple"),
+    //                 location: first.location,
+    //             })),
+    //         },
+    //         err => Trampoline::Done(err),
+    //     }))
+    // }
+
+    // fn eval_second(&mut self, second: Second) -> Trampoline {
+    //     Trampoline::Continue(Box::new(move || match self.eval(second.value).run() {
+    //         Ok(value) => match value {
+    //             Value::Tuple(Tuple { first: _, second }) => Trampoline::Done(Ok(*second)),
+    //             _value => Trampoline::Done(Err(RuntimeError {
+    //                 message: String::from("invalid expression"),
+    //                 full_text: String::from(
+    //                     "cannot use second operation from anything but a tuple",
+    //                 ),
+    //                 location: second.location,
+    //             })),
+    //         },
+    //         err => Trampoline::Done(err),
+    //     }))
+    // }
+
+    // fn eval_print(&mut self, print: Print) -> Trampoline {
+    //     Trampoline::Continue(Box::new(move || {
+    //         let print = match self.eval(print.value).run() {
+    //             Ok(value) => {
+    //                 println!("{}", value);
+    //                 Trampoline::Done(Ok(value))
+    //             }
+    //             err => Trampoline::Done(err),
+    //         };
+
+    //         todo!()
+    //     }))
+    // }
 
     fn eval(&mut self, term: Box<Term>) -> Trampoline {
         match *term {
-            Term::Int(int) => Trampoline::Land(Ok(Value::Int(int.value))),
-            Term::Str(str) => Trampoline::Land(Ok(Value::Str(str.value))),
-            Term::Bool(bool) => Trampoline::Land(Ok(Value::Bool(bool.value))),
-            Term::Let(let_) => Trampoline::let_(self, let_),
-            Term::Function(function) => Trampoline::function(self, function),
-            Term::Call(call) => Trampoline::call(self, call),
-            Term::If(if_) => Trampoline::if_(self, if_),
-            Term::Binary(binary) => Trampoline::binary(self, binary),
-            Term::Var(var) => Trampoline::var(self, var),
-            Term::Tuple(tuple) => Trampoline::tuple(self, tuple),
-            Term::First(first) => Trampoline::first(self, first),
-            Term::Second(second) => Trampoline::second(self, second),
-            Term::Print(print) => Trampoline::print(self, print),
+            Term::Int(int) => Trampoline::Done(Ok(Value::Int(int.value))),
+            Term::Str(str) => Trampoline::Done(Ok(Value::Str(str.value))),
+            Term::Bool(bool) => Trampoline::Done(Ok(Value::Bool(bool.value))),
+            Term::Let(let_) => self.eval_let(let_),
+            _ => todo!()
+            // Term::Function(function) => self.eval_function(function),
+            // Term::Call(call) => self.eval_call(call),
+            // Term::If(if_) => self.eval_if(if_),
+            // Term::Binary(binary) => self.eval_binary(binary),
+            // Term::Var(var) => self.eval_var(var),
+            // Term::Tuple(tuple) => self.eval_tuple(tuple),
+            // Term::First(first) => self.eval_first(first),
+            // Term::Second(second) => self.eval_second(second),
+            // Term::Print(print) => self.eval_print(print),
         }
-    }
-
-    pub fn eval_file(file: File) -> Result<Value, RuntimeError> {
-        let mut interpreter = Self::default();
-
-        interpreter.eval(Box::new(file.expression)).run()
     }
 }
 
@@ -1014,5 +935,36 @@ mod tests {
         let is_pure = is_pure(&inpure_function);
 
         assert!(!is_pure);
+    }
+}
+
+fn trampoline_eval_let(let_: Let, context: Context, cache: &mut Cache) -> Trampoline {
+    Trampoline::Continue(Box::new(move || {
+        match trampoline_eval(let_.value.clone(), context, cache).run() {
+            Ok(value) => {
+                context = context.update(let_.name.text.clone(), value);
+                trampoline_eval(let_.next.clone(), context, cache)
+            }
+            err @ Err(_) => Trampoline::Done(err),
+        }
+    }))
+}
+
+fn trampoline_eval(term: Box<Term>, context: Context, cache: &mut Cache) -> Trampoline {
+    match *term {
+        Term::Int(int) => Trampoline::Done(Ok(Value::Int(int.value))),
+        Term::Str(str) => Trampoline::Done(Ok(Value::Str(str.value))),
+        Term::Bool(bool) => Trampoline::Done(Ok(Value::Bool(bool.value))),
+        Term::Let(let_) => trampoline_eval_let(let_, context, cache),
+        _ => todo!()
+        // Term::Function(function) => self.eval_function(function),
+        // Term::Call(call) => self.eval_call(call),
+        // Term::If(if_) => self.eval_if(if_),
+        // Term::Binary(binary) => self.eval_binary(binary),
+        // Term::Var(var) => self.eval_var(var),
+        // Term::Tuple(tuple) => self.eval_tuple(tuple),
+        // Term::First(first) => self.eval_first(first),
+        // Term::Second(second) => self.eval_second(second),
+        // Term::Print(print) => self.eval_print(print),
     }
 }

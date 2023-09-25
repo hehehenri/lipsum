@@ -111,7 +111,7 @@ impl Element for Bool {
 #[derive(Default, Debug, Clone, serde::Deserialize, Hash, PartialEq, Eq)]
 pub struct Int {
     /// The value of the integer.
-    pub value: i32,
+    pub value: i64,
 
     /// The location of the integer in the source code.
     pub location: Location,

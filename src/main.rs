@@ -1,5 +1,5 @@
 use clap::Parser;
-use rinha::interp::eval_file;
+use rinha::interp::{eval_file, Interpreter};
 
 #[derive(Parser, Debug)]
 struct Args {
