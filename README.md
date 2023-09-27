@@ -2,7 +2,7 @@
 
 A three walking interpreter for [rinha de compilers](https://github.com/aripiprazole/rinha-de-compiler)
 
-## Try it
+## Run it
 ```
 $ docker build -t lipsum .
 
