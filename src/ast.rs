@@ -266,3 +266,13 @@ impl Element for Term {
         }
     }
 }
+
+impl Term {
+    pub fn is_pure(&self) -> bool {
+        match self {
+            Term::Function(function) => function.value.is_pure(),
+            Term::Print(_) => false,
+            _term => true,
+        }
+    }
+}

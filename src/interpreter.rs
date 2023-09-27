@@ -1,11 +1,10 @@
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{hash_map::DefaultHasher, HashMap},
     fmt::Display,
     hash::{Hash, Hasher},
     rc::Rc,
 };
-use tailcall::tailcall;
 
 use crate::ast::{
     Binary, Call, Element, First, Function, If, Let, Location, Print, Second, Term, Var,
@@ -115,6 +114,47 @@ fn eval_let<I: Printer>(
     eval(let_.next, context, cache, io)
 }
 
+fn cache_key(body: &Box<Term>, arguments: Vec<Value>) -> Option<String> {
+    let arguments = arguments
+        .into_iter()
+        .map(|argument| match argument {
+            Value::Closure(_) => None,
+            value => {
+                let mut s = DefaultHasher::new();
+                // TODO: is ok to define the hasher on each iteration?
+                value.hash(&mut s);
+                Some(s.finish().to_string())
+            }
+        })
+        .collect::<Option<Vec<String>>>()?;
+
+    let mut s = DefaultHasher::new();
+    (*body.clone(), arguments).hash(&mut s);
+
+    Some(s.finish().to_string())
+}
+
+fn eval_memo<I: Printer>(
+    body: Box<Term>,
+    arguments: Vec<Value>,
+    context: &mut Context,
+    cache: &mut Cache,
+    io: &mut I,
+) -> Result<Value, RuntimeError> {
+    match cache_key(&body, arguments.clone()) {
+        Some(cache_key) => match cache.get(&cache_key) {
+            Some(cached_value) => Ok(cached_value.clone()),
+            None => {
+                let value = eval(body, context, cache, io)?;
+                cache.insert(cache_key, value.clone());
+
+                Ok(value)
+            }
+        },
+        None => eval(body, context, cache, io),
+    }
+}
+
 fn eval_call<I: Printer>(
     call: Call,
     context: &mut Context,
@@ -126,14 +166,18 @@ fn eval_call<I: Printer>(
             let mut new_context = closure.context.borrow_mut().clone();
             let mut arguments = Vec::new();
 
-            for (parameter, argument) in closure.parameters.into_iter().zip(call.arguments) {
+            for (parameter, argument) in closure.parameters.clone().into_iter().zip(call.arguments)
+            {
                 let argument = eval(Box::new(argument), context, cache, io)?;
                 arguments.push(argument.clone());
 
                 new_context.insert(parameter.text, argument);
             }
 
-            eval(closure.body, &mut new_context, cache, io)
+            match closure.body.is_pure() {
+                true => eval_memo(closure.body, arguments, &mut new_context, cache, io),
+                false => eval(closure.body, &mut new_context, cache, io),
+            }
         }
         value => Err(RuntimeError {
             message: String::from("invalid function call"),
@@ -275,7 +319,6 @@ fn eval_function(function: Function, context: &mut Context) -> Result<Value, Run
     }))
 }
 
-#[tailcall]
 pub fn eval<I: Printer>(
     term: Box<Term>,
     context: &mut Context,
