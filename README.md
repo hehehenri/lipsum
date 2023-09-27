@@ -1,6 +1,14 @@
-# Compile and run it 
+# lipsum
 
+A three walking interpreter for [rinha de compilers](https://github.com/aripiprazole/rinha-de-compiler)
+
+## Try it
 ```
-docker build . -t rinha
-docker run -it rinha --help"
+$ docker build -t lipsum .
+
+$ docker run -v \
+    ./examples/hello-world.json:/var/rinha/source.rinha.json \
+    --memory=2gb \
+    --cpus=2 \
+    lipsum
 ```

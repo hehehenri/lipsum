@@ -4,22 +4,14 @@
     "kind": "Let",
     "name": {
       "text": "fib",
-      "location": {
-        "start": 4,
-        "end": 7,
-        "filename": "files/fib.rinha"
-      }
+      "location": { "start": 4, "end": 7, "filename": "files/fib.rinha" }
     },
     "value": {
       "kind": "Function",
       "parameters": [
         {
           "text": "n",
-          "location": {
-            "start": 14,
-            "end": 15,
-            "filename": "files/fib.rinha"
-          }
+          "location": { "start": 14, "end": 15, "filename": "files/fib.rinha" }
         }
       ],
       "value": {
@@ -45,20 +37,12 @@
               "filename": "files/fib.rinha"
             }
           },
-          "location": {
-            "start": 28,
-            "end": 33,
-            "filename": "files/fib.rinha"
-          }
+          "location": { "start": 28, "end": 33, "filename": "files/fib.rinha" }
         },
         "then": {
           "kind": "Var",
           "text": "n",
-          "location": {
-            "start": 41,
-            "end": 42,
-            "filename": "files/fib.rinha"
-          }
+          "location": { "start": 41, "end": 42, "filename": "files/fib.rinha" }
         },
         "otherwise": {
           "kind": "Binary",
@@ -155,23 +139,11 @@
               "filename": "files/fib.rinha"
             }
           },
-          "location": {
-            "start": 58,
-            "end": 81,
-            "filename": "files/fib.rinha"
-          }
+          "location": { "start": 58, "end": 81, "filename": "files/fib.rinha" }
         },
-        "location": {
-          "start": 24,
-          "end": 85,
-          "filename": "files/fib.rinha"
-        }
+        "location": { "start": 24, "end": 85, "filename": "files/fib.rinha" }
       },
-      "location": {
-        "start": 10,
-        "end": 87,
-        "filename": "files/fib.rinha"
-      }
+      "location": { "start": 10, "end": 87, "filename": "files/fib.rinha" }
     },
     "next": {
       "kind": "Print",
@@ -180,11 +152,7 @@
         "callee": {
           "kind": "Var",
           "text": "fib",
-          "location": {
-            "start": 97,
-            "end": 100,
-            "filename": "files/fib.rinha"
-          }
+          "location": { "start": 97, "end": 100, "filename": "files/fib.rinha" }
         },
         "arguments": [
           {
@@ -197,27 +165,11 @@
             }
           }
         ],
-        "location": {
-          "start": 97,
-          "end": 104,
-          "filename": "files/fib.rinha"
-        }
+        "location": { "start": 97, "end": 104, "filename": "files/fib.rinha" }
       },
-      "location": {
-        "start": 90,
-        "end": 105,
-        "filename": "files/fib.rinha"
-      }
+      "location": { "start": 90, "end": 105, "filename": "files/fib.rinha" }
     },
-    "location": {
-      "start": 0,
-      "end": 105,
-      "filename": "files/fib.rinha"
-    }
+    "location": { "start": 0, "end": 105, "filename": "files/fib.rinha" }
   },
-  "location": {
-    "start": 0,
-    "end": 105,
-    "filename": "files/fib.rinha"
-  }
+  "location": { "start": 0, "end": 105, "filename": "files/fib.rinha" }
 }
