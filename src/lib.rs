@@ -1,2 +1,3 @@
 pub mod ast;
-pub mod interp;
+pub mod binary;
+pub mod interpreter;

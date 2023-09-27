@@ -1,5 +1,8 @@
 use clap::Parser;
-use rinha::interp::{eval_file, Interpreter};
+use rinha::{
+    ast::File,
+    interpreter::{eval, Cache, Context},
+};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -18,9 +21,11 @@ fn main() -> Result<(), String> {
 
     let file_buffer = std::fs::read_to_string(path).expect("failed to load source");
 
-    let file_ast = serde_json::from_str(&file_buffer).expect("failed to parse ast");
+    let file_ast: File = serde_json::from_str(&file_buffer).expect("failed to parse ast");
 
-    let _ = eval_file(file_ast).unwrap();
+    let mut context = Context::new();
+    let mut cache = Cache::new();
+    let _ = eval(Box::new(file_ast.expression), &mut context, &mut cache).unwrap();
 
     Ok(())
 }
