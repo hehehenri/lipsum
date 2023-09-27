@@ -1,9 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::{
-        hash_map::{DefaultHasher, Entry},
-        HashMap,
-    },
+    collections::HashMap,
     fmt::Display,
     hash::{Hash, Hasher},
     rc::Rc,
@@ -57,8 +54,6 @@ impl Hash for Value {
     }
 }
 
-pub type Cache = std::collections::HashMap<String, Value>;
-
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let value = match self {
@@ -79,6 +74,7 @@ impl Display for Value {
     }
 }
 
+pub type Cache = std::collections::HashMap<String, Value>;
 pub type Context = HashMap<String, Value>;
 
 #[derive(Debug, Clone)]
@@ -112,26 +108,6 @@ fn eval_let(let_: Let, context: &mut Context, cache: &mut Cache) -> Result<Value
     }
 
     eval(let_.next, context, cache)
-}
-
-fn cache_key(body: &Box<Term>, arguments: Vec<Value>) -> Option<String> {
-    let arguments = arguments
-        .into_iter()
-        .map(|argument| match argument {
-            Value::Closure(_) => None,
-            value => {
-                let mut s = DefaultHasher::new();
-                // TODO: is ok to define the hasher on each iteration?
-                value.hash(&mut s);
-                Some(s.finish().to_string())
-            }
-        })
-        .collect::<Option<Vec<String>>>()?;
-
-    let mut s = DefaultHasher::new();
-    (*body.clone(), arguments).hash(&mut s);
-
-    Some(s.finish().to_string())
 }
 
 fn eval_call(call: Call, context: &mut Context, cache: &mut Cache) -> Result<Value, RuntimeError> {
@@ -255,14 +231,6 @@ fn eval_print(
     println!("{}", print_value.clone());
 
     Ok(print_value)
-}
-
-fn is_pure(term: &Term) -> bool {
-    match term {
-        Term::Function(function) => is_pure(&function.value),
-        Term::Print(_) => false,
-        _ => true,
-    }
 }
 
 fn eval_function(function: Function, context: &mut Context) -> Result<Value, RuntimeError> {
