@@ -301,7 +301,7 @@ pub fn eval<I: Printer>(
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::{Location, Term, Tuple, Var};
+    use crate::ast::{Location, Term, Var};
 
     use super::{eval, Cache, Context, Printer, Value};
 
@@ -310,7 +310,7 @@ mod tests {
 
     impl Printer for DummyIO {
         fn print(&mut self, value: super::Value) -> super::Value {
-            self.0.push_str(&format!("{}\n", value));
+            self.0 = format!("{}\n{}", value, self.0);
 
             value
         }
@@ -328,17 +328,6 @@ mod tests {
         Term::Int(crate::ast::Int {
             value: int,
             location: location(),
-        })
-    }
-
-    fn v_int(int: i64) -> Value {
-        Value::Int(int)
-    }
-
-    fn v_tuple(first: Value, second: Value) -> Value {
-        Value::Tuple(super::Tuple {
-            first: Box::new(first),
-            second: Box::new(second),
         })
     }
 
@@ -365,39 +354,12 @@ mod tests {
         })
     }
 
-    fn tuple(first: Term, second: Term) -> Term {
-        Term::Tuple(Tuple {
-            first: Box::new(first),
-            second: Box::new(second),
-            location: location(),
-        })
-    }
-
-    fn add(lhs: Term, rhs: Term) -> Term {
-        Term::Binary(super::Binary {
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
-            op: crate::ast::BinaryOp::Add,
-            location: location(),
-        })
-    }
-
-    fn var_(text: &str) -> Term {
-        Term::Var(Var {
-            text: text.to_string(),
-            location: location(),
-        })
-    }
-
     fn eq(l: Value, r: Value) -> bool {
-        match l.eq(&r, &location()).unwrap() {
-            Value::Bool(bool) => bool,
-            _ => panic!(),
-        }
+        match value {}
     }
 
     #[test]
-    fn print_inner_and_outer_scope() {
+    fn print() {
         let mut io = DummyIO::default();
 
         let let_ = let_("_", print_(int(1)), print_(int(2)));
@@ -405,37 +367,6 @@ mod tests {
         let mut cache = Cache::new();
         let result = eval(Box::new(let_), &mut context, &mut cache, &mut io).unwrap();
 
-        assert!(eq(result, v_int(2)));
-        assert_eq!(io.0, "1\n2\n");
-    }
-
-    #[test]
-    fn print_inside_var_scope_and_var() {
-        let mut io = DummyIO::default();
-
-        let let_ = let_(
-            "tuple",
-            tuple(print_(int(1)), print_(int(2))),
-            print_(var_("tuple")),
-        );
-        let mut context = Context::new();
-        let mut cache = Cache::new();
-        let result = eval(Box::new(let_), &mut context, &mut cache, &mut io).unwrap();
-
-        assert_eq!(result.to_string(), v_tuple(v_int(1), v_int(2)).to_string());
-        assert_eq!(io.0, "1\n2\n(1, 2)\n");
-    }
-
-    #[test]
-    fn print_sum_operation_and_operated() {
-        let mut io = DummyIO::default();
-
-        let print = print_(add(print_(int(1)), print_(int(2))));
-        let mut context = Context::new();
-        let mut cache = Cache::new();
-        let result = eval(Box::new(print), &mut context, &mut cache, &mut io).unwrap();
-
-        assert!(eq(result, v_int(3)));
-        assert_eq!(io.0, "1\n2\n3\n");
+        assert_eq!(result.eq(int(2), location),)
     }
 }

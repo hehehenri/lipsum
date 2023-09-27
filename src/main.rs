@@ -1,7 +1,7 @@
 use clap::Parser;
 use rinha::{
     ast::File,
-    interpreter::{eval, Cache, Context},
+    interpreter::{eval, Cache, Context, IO},
 };
 
 #[derive(Parser, Debug)]
@@ -25,7 +25,14 @@ fn main() -> Result<(), String> {
 
     let mut context = Context::new();
     let mut cache = Cache::new();
-    let _ = eval(Box::new(file_ast.expression), &mut context, &mut cache).unwrap();
+    let mut io = IO {};
+    let _ = eval(
+        Box::new(file_ast.expression),
+        &mut context,
+        &mut cache,
+        &mut io,
+    )
+    .unwrap();
 
     Ok(())
 }
